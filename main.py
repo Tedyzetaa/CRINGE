@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel # <-- IMPORT CORRIGIDO
-from models import User, Bot, ChatGroup, NewMessage, Message, MemberUpdate # Importado MemberUpdate do models
-# Importa as novas funções do db.py (SQLite)
+from pydantic import BaseModel
+from models import User, Bot, ChatGroup, NewMessage, Message, MemberUpdate
 from db import get_user, get_bot, get_group, save_message, save_bot, get_all_bots, update_group_members 
 import time
 import os
@@ -13,18 +12,18 @@ from google.genai import types
 import asyncio
 from typing import Dict, Any
 
+# --- Multimodal Imports ---
+import base64 
+from io import BytesIO
+
 # Carrega as variáveis de ambiente (incluindo GEMINI_API_KEY)
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GEMINI_API_KEY:
-    # Levanta o erro para o Render em vez de usar raise ValueError (mais robusto)
-    print("ERRO CRÍTICO: GEMINI_API_KEY não encontrada. O backend NÃO funcionará.")
-    # Não levantamos o erro diretamente aqui para que o Uvicorn possa iniciar, 
-    # mas o cliente Gemini falhará se a chave for usada.
+    print("ERRO CRÍTICO: GEMINI_API_KEY não encontrada.")
     client = None
 else:
-    # Inicializa o cliente Gemini
     client = genai.Client(api_key=GEMINI_API_KEY)
 
 
@@ -32,66 +31,58 @@ else:
 # 1. Configuração Inicial e Aplicação
 # ----------------------------------------------------------------------
 app = FastAPI(
-    title="CRINGE RPG-AI Multi-Bot Backend - V2.1",
-    description="API para gerenciar usuários, bots e grupos de chat com persistência SQLite e personalização avançada."
+    title="CRINGE RPG-AI Multi-Bot Backend - V2.2",
+    description="API para gerenciar com persistência SQLite e contexto multimodal."
 )
 
 # ----------------------------------------------------------------------
-# 2. Rotas de Teste e Informação
+# 2. Rotas (Permanecem as mesmas da V2.1)
 # ----------------------------------------------------------------------
 
 @app.get("/")
 def read_root():
-    return {"status": "OK", "version": "2.1 (SQLite/Advanced Bots)", "message": "Backend do CRINGE RPG-AI está ativo!"}
+    return {"status": "OK", "version": "2.2 (SQLite/Multimodal)", "message": "Backend do CRINGE RPG-AI está ativo!"}
 
 @app.get("/groups/{group_id}", response_model=ChatGroup)
 def get_chat_group(group_id: str):
-    """Retorna detalhes completos de um grupo de chat, incluindo histórico."""
     group = get_group(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
     return group
 
-# ROTA PARA CRIAÇÃO E LISTAGEM DE BOTS (USANDO SQLite)
 @app.post("/bots/create", response_model=Bot)
 def create_new_bot(new_bot: Bot):
-    """Cria um novo Bot de IA e o salva no banco de dados persistente."""
     if get_bot(new_bot.bot_id):
         raise HTTPException(status_code=400, detail=f"Bot ID '{new_bot.bot_id}' já existe.")
         
-    save_bot(new_bot) # Usa a função save_bot do db.py (SQLite)
+    save_bot(new_bot)
     return new_bot
 
 @app.get("/bots/all", response_model=list[Bot])
 def get_all_available_bots():
-    """Retorna a lista de todos os bots criados (do SQLite)."""
     return get_all_bots()
 
-# ROTA: Adicionar/Remover Membros do Grupo
 @app.post("/groups/{group_id}/members")
 def update_group_members_route(group_id: str, member_update: MemberUpdate):
-    """Atualiza a lista de membros de um grupo."""
     group = get_group(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
 
-    # 1. Filtra a lista para IDs válidos e remove IDs repetidos
     final_members = list(set(member_update.member_ids))
     
-    # 2. Garante que o usuário de teste (user-1) e o Mestre estejam sempre lá
     if "user-1" not in final_members:
         final_members.append("user-1")
 
     if "bot-mestre" not in final_members:
         final_members.append("bot-mestre")
         
-    update_group_members(group_id, final_members) # Usa a função de atualização do db.py
+    update_group_members(group_id, final_members)
     
     return {"status": "success", "member_ids": final_members}
 
 
 # ----------------------------------------------------------------------
-# 3. Lógica do Gemini para um Único Bot - NOVA CONSTRUÇÃO DE PROMPT
+# 3. Lógica do Gemini - NOVO TRATAMENTO MULTIMODAL
 # ----------------------------------------------------------------------
 
 async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -> Message:
@@ -101,29 +92,27 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
          return Message(
             sender_id=bot.bot_id,
             sender_type="bot",
-            text=f"Erro de IA: Cliente Gemini não inicializado (Chave de API ausente ou inválida).",
+            text=f"Erro de IA: Cliente Gemini não inicializado (Chave de API ausente).",
             timestamp=time.time()
         )
         
+    # --- 3.1. CONSTRUÇÃO DO CONTEXTO DE CONVERSA (HISTÓRICO) ---
     contents = []
-    
-    # Mapeia mensagens recentes para o formato Content
     for msg in group.messages[-10:]:
         role = "user" if msg.sender_type == "user" else "model"
-        # Trata bots que não são o alvo como 'user' no contexto para o alvo
         if msg.sender_type == "bot" and msg.sender_id != bot.bot_id:
              role = "user" 
 
         contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg.text)]))
 
-    # --- NOVA CONSTRUÇÃO DO SYSTEM INSTRUCTION (V2.1) ---
+    # --- 3.2. CONSTRUÇÃO DO SYSTEM INSTRUCTION (TEXTUAL) ---
     
     system_instruction = (
         f"**INSTRUÇÕES DO AGENTE: {bot.name} ({bot.gender})**\n\n"
         f"**1. PERSONALIDADE E REGRAS (NÚCLEO):**\n"
         f"Siga estas instruções rigorosamente:\n{bot.personality}\n\n"
         
-        f"**2. CONTEXTO DE CONVERSA/ESTILO (FEW-SHOT):**\n"
+        f"**2. CONTEXTO DE CONVERSA/ESTILO (TEXTO):**\n"
         f"O texto a seguir deve guiar o ESTILO, TOM e LORE da sua resposta. Use-o como exemplo, mas NÃO o repita literalmente na resposta:\n"
         f"'{bot.conversation_context}'\n\n"
         
@@ -135,18 +124,42 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
         f"**TAREFA:** Sua única resposta deve reagir à última mensagem do usuário ('{user_message_text}'). Mantenha a concisão e o foco no seu papel."
     )
     
+    # --- 3.3. ADICIONAR IMAGENS AO CONTEÚDO MULTIMODAL (CONTENTS) ---
+    
+    multimodal_parts = []
+    
+    # 1. Adiciona o texto do System Instruction como o primeiro Part
+    multimodal_parts.append(types.Part.from_text(text=system_instruction))
+    
+    # 2. Adiciona as imagens (decodificadas de Base64)
+    for data_uri in bot.context_images:
+        try:
+            # Extrai o tipo e o dado Base64 (ex: "data:image/png;base64,iVBORw...")
+            metadata, encoded_data = data_uri.split(',', 1)
+            mime_type = metadata.split(';')[0].split(':')[1]
+            
+            # Decodifica Base64 para bytes
+            image_bytes = base64.b64decode(encoded_data)
+            
+            # Cria a parte do Gemini a partir dos bytes da imagem
+            multimodal_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+            
+        except Exception as e:
+            print(f"Erro ao processar Data URI de imagem para o bot {bot.name}: {e}")
+            
+    # Insere as instruções multimodais (texto + imagens) no início do histórico como a primeira mensagem do usuário (System Prompt)
+    contents.insert(0, types.Content(role="user", parts=multimodal_parts))
+
     # --------------------------------------------------------
     
     ai_config_dict: Dict[str, Any] = bot.ai_config
     
-    # Converte para o objeto GenerateContentConfig
     ai_config = types.GenerateContentConfig(
-        system_instruction=system_instruction,
+        # system_instruction deve estar vazio pois o conteúdo foi movido para 'contents'
         **ai_config_dict
     )
     
     try:
-        # Usa a chamada síncrona DENTRO de um executor
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
@@ -174,7 +187,7 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
         )
 
 # ----------------------------------------------------------------------
-# 4. Rota Principal: Envio de Mensagens
+# 4. Rota Principal: Envio de Mensagens (Permanecem a mesma)
 # ----------------------------------------------------------------------
 
 @app.post("/groups/send_message")
@@ -187,7 +200,6 @@ async def send_group_message(new_msg: NewMessage):
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
     
-    # 1. Salvar a mensagem do usuário
     user_message = Message(
         sender_id=new_msg.sender_id,
         sender_type="user",
@@ -196,24 +208,19 @@ async def send_group_message(new_msg: NewMessage):
     )
     save_message(group.group_id, user_message)
 
-    # 2. Identificar os bots na sala e criar tarefas assíncronas
     bot_tasks = []
     
     for member_id in group.member_ids:
         bot = get_bot(member_id)
-        # Garante que só chame a IA para IDs que são bots
         if bot and member_id != new_msg.sender_id: 
             task = get_bot_response(bot, group, new_msg.text)
             bot_tasks.append(task)
             
-    # 3. Executa todas as chamadas à API do Gemini em paralelo
     ai_responses = await asyncio.gather(*bot_tasks)
     
-    # 4. Salvar as respostas geradas pelos bots e preparar o retorno
     final_responses = []
     for response_message in ai_responses:
         if response_message.text and not response_message.text.startswith("Erro de IA:"):
-            # Salva no SQLite
             save_message(group.group_id, response_message) 
             final_responses.append(response_message)
         elif response_message.text.startswith("Erro de IA:"):

@@ -9,7 +9,7 @@ class User(BaseModel):
     """Representa um usuário ou jogador."""
     user_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     username: str
-    is_admin: bool = False # Campo corrigido para persistência
+    is_admin: bool = False
 
 class Message(BaseModel):
     """Representa uma única mensagem na conversa."""
@@ -24,17 +24,19 @@ class Bot(BaseModel):
     creator_id: str
     name: str
     
-    # NOVOS CAMPOS PARA PERSONALIZAÇÃO DA V2.1
+    # CAMPOS DE PERSONALIZAÇÃO (V2.1)
     gender: Literal['Masculino', 'Feminino', 'Não Binário', 'Indefinido'] = 'Indefinido'
-    introduction: str = "" # Breve descrição do bot para o usuário
-    personality: str      # Detalhe da personalidade (o núcleo da IA)
+    introduction: str = ""
+    personality: str
     welcome_message: str = "Saudações, aventureiro!"
-    conversation_context: str = "" # Novo campo para exemplos, links, etc.
+    conversation_context: str = "" 
     
-    # Este campo é mantido no modelo, mas o valor é construído no main.py
+    # NOVO CAMPO PARA IMAGENS DE CONTEXTO (V2.2)
+    context_images: List[str] = Field(default_factory=list) # Lista de Data URIs (Base64)
+
     system_prompt: str = "" 
     
-    ai_config: Dict[str, Any]  # Ex: {"temperature": 0.9, "max_output_tokens": 1024}
+    ai_config: Dict[str, Any]
 
 class ChatGroup(BaseModel):
     """Representa uma sala de chat com seus membros e histórico."""
@@ -52,6 +54,6 @@ class NewMessage(BaseModel):
     sender_id: str
     text: str
 
-# Modelo auxiliar para a nova rota de atualização de membros
+# Modelo auxiliar para a rota de atualização de membros
 class MemberUpdate(BaseModel):
     member_ids: list[str]

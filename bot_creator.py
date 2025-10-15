@@ -3,35 +3,35 @@ import requests
 import json
 import uuid
 import time
+import base64
+from io import BytesIO
 
 # --- CONFIGURAÇÃO ---
 BACKEND_URL = "https://cringe-8h21.onrender.com"
 # Se estiver usando URL local: BACKEND_URL = "http://127.0.0.1:8080"
 
 st.set_page_config(
-    page_title="CRINGE RPG-AI: V2.1 - Criador de Bots",
+    page_title="CRINGE RPG-AI: V2.2 - Criador de Bots Multimodal",
     layout="wide"
 )
 
-st.title("🤖 CRINGE RPG-AI: V2.1 - Criador de Agentes")
-st.markdown("Use este formulário para criar um novo agente (Mestre ou NPC) com personalidade e contexto ricos. Os bots criados são salvos permanentemente no banco de dados SQLite.")
+st.title("🤖 CRINGE RPG-AI: V2.2 - Criador de Agentes (Multimodal)")
+st.markdown("Crie agentes de IA com personalidade rica, contexto textual e *visual* (imagens/prints).")
 st.markdown("---")
 
 # Função para enviar a requisição de criação
 def create_bot(payload):
     try:
-        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=15)
+        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=20) # Aumentado timeout
         response.raise_for_status()
         
         st.success(f"🤖 Bot '{payload['name']}' criado com sucesso e salvo no SQLite!")
         st.balloons()
         
-        # Limpa o formulário após o sucesso
         st.session_state.clear()
         st.rerun()
 
     except requests.exceptions.HTTPError as e:
-        # Tenta extrair a mensagem de erro do JSON
         try:
             error_detail = response.json().get('detail', str(e))
         except:
@@ -64,14 +64,14 @@ with st.form("bot_creation_form"):
     bot_intro = st.text_area(
         "Introdução / Breve Descrição",
         placeholder="Um Bárbaro de dois metros de altura, irritadiço e com um senso de humor duvidoso. Não gosta de elfos.",
-        help="Esta é uma descrição curta usada para introduzir o bot em um cenário.",
+        help="Descrição curta para introduzir o bot em um cenário.",
         height=70
     )
     
     bot_welcome = st.text_input(
         "Mensagem de Boas-Vindas (Opcional)",
         placeholder="Por que vocês estão me incomodando? Falem logo!",
-        help="A primeira frase que o bot dirá quando for acionado ou no início de um chat.",
+        help="A primeira frase que o bot dirá.",
         max_chars=200
     )
     
@@ -80,18 +80,30 @@ with st.form("bot_creation_form"):
     bot_personality = st.text_area(
         "Personalidade Detalhada (System Prompt)",
         placeholder="Você é um Mestre de Masmorra que valoriza a ação e a brutalidade. Seu tom é cínico e sarcástico, e você só narra eventos violentos.",
-        help="As regras e a descrição de personalidade que o modelo Gemini deve seguir em todas as interações. **Seja o mais específico possível.**",
+        help="As regras e a descrição de personalidade que o modelo Gemini deve seguir. Seja o mais específico possível.",
         height=150
     )
 
     # 4. Contexto de Conversação (Few-Shot/Grounding)
-    st.subheader("📜 Exemplos de Conversa (Melhora a Performance)")
-    bot_context = st.text_area(
-        "Exemplos, Links ou Contexto de Lore",
-        placeholder="Ex: 'Usuário: Eu ataco o dragão. Agente: Você erra miseravelmente, seu tolo!' Inclua trechos de diálogo ou links para contexto de lore.",
-        help="Qualquer texto que ajude a moldar o **ESTILO** de resposta do bot. Isso é usado para Few-Shot Learning. O conteúdo não será repetido.",
-        height=200
-    )
+    st.subheader("📜 Contexto de Treinamento (Multimodal)")
+    
+    col_text, col_image = st.columns([1, 1])
+    
+    with col_text:
+        bot_context = st.text_area(
+            "Exemplos Textuais, Links ou Contexto de Lore",
+            placeholder="Ex: 'Usuário: Eu ataco o dragão. Agente: Você erra miseravelmente, seu tolo!'",
+            help="Texto que ajuda a moldar o **ESTILO** e o **LORE** do bot.",
+            height=200
+        )
+        
+    with col_image:
+        uploaded_files = st.file_uploader(
+            "Carregar Imagens/Prints (Máx: 3 arquivos, 2MB cada)", 
+            type=["png", "jpg", "jpeg"], 
+            accept_multiple_files=True,
+            key="image_uploader"
+        )
     
     # 5. Configurações da IA
     st.subheader("⚙️ Configurações da IA")
@@ -123,19 +135,40 @@ if submitted:
     if not bot_name or not bot_personality:
         st.error("Por favor, preencha o Nome do Agente e o Núcleo de Personalidade. Eles são obrigatórios.")
     else:
-        # Cria um ID único (usando nome e timestamp para evitar colisão)
+        # --- CONVERTER IMAGENS PARA DATA URI (Base64) ---
+        context_data_uris = []
+        if uploaded_files:
+            if len(uploaded_files) > 3:
+                st.warning("Limite de 3 imagens. Apenas as 3 primeiras serão usadas.")
+                uploaded_files = uploaded_files[:3]
+                
+            for file in uploaded_files:
+                file_size_mb = file.size / (1024 * 1024)
+                
+                if file_size_mb > 2:
+                    st.warning(f"O arquivo {file.name} excedeu o limite de 2MB. Ignorando.")
+                    continue
+                
+                # Conversão para Base64
+                file_bytes = file.read()
+                encoded_string = base64.b64encode(file_bytes).decode('utf-8')
+                data_uri = f"data:{file.type};base64,{encoded_string}"
+                context_data_uris.append(data_uri)
+        # -----------------------------------------------------
+
         bot_id = f"bot-{bot_name.lower().replace(' ', '-').replace('.', '')}-{int(time.time() % 1000)}"
         
         payload = {
             "bot_id": bot_id,
-            "creator_id": "user-1", # Marcamos como criado pelo usuário
+            "creator_id": "user-1",
             "name": bot_name,
             "gender": bot_gender,
             "introduction": bot_intro,
             "personality": bot_personality,
             "welcome_message": bot_welcome,
             "conversation_context": bot_context,
-            "system_prompt": "", # O backend constrói o prompt final
+            "context_images": context_data_uris, # ENVIANDO O BASE64
+            "system_prompt": "", 
             "ai_config": {
                 "temperature": bot_temperature,
                 "max_output_tokens": bot_max_tokens

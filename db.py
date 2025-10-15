@@ -7,7 +7,7 @@ from models import User, Bot, Message, ChatGroup
 # --- Configuração do Banco de Dados ---
 DB_NAME = 'cringe_rpg.db'
 
-# --- Configuração dos Modelos de Teste (V2.1 - COMPLETO) ---
+# --- Configuração dos Modelos de Teste (V2.2 - COMPLETO) ---
 
 TEST_USER = User(
     user_id="user-1",
@@ -20,7 +20,6 @@ TEST_BOT_MASTER = Bot(
     creator_id="system",
     name="Mestre da Masmorra",
     
-    # NOVOS CAMPOS ADICIONADOS (Corrigido o ValidationError)
     gender='Indefinido',
     introduction="O Narrador implacável do seu destino.",
     personality=(
@@ -30,8 +29,9 @@ TEST_BOT_MASTER = Bot(
     ),
     welcome_message="Que os dados decidam seu destino! Onde você vai primeiro?",
     conversation_context="O Mestre narra em blocos curtos e com tom neutro, focando em descrições ambientais.",
+    context_images=[], # Adicionado campo V2.2
     
-    system_prompt="", # Deixamos vazio, pois será construído no main.py
+    system_prompt="", 
     ai_config={"temperature": 0.8, "max_output_tokens": 1024}
 )
 
@@ -40,7 +40,6 @@ TEST_BOT_BARD = Bot(
     creator_id="system",
     name="Bardo Errante",
     
-    # NOVOS CAMPOS ADICIONADOS (Corrigido o ValidationError)
     gender='Masculino',
     introduction="Um bardo com um alaúde que adora rimas ruins e piadas inoportunas.",
     personality=(
@@ -50,8 +49,9 @@ TEST_BOT_BARD = Bot(
     ),
     welcome_message="Ouço um chamado por canções! Digam o que desejam, em versos, por favor.",
     conversation_context="Suas respostas sempre incluem uma rima ou trocadilho, e terminam com a assinatura: *canta uma canção sobre isso*",
+    context_images=[], # Adicionado campo V2.2
     
-    system_prompt="", # Deixamos vazio, pois será construído no main.py
+    system_prompt="", 
     ai_config={"temperature": 0.9, "max_output_tokens": 512}
 )
 
@@ -60,7 +60,7 @@ TEST_GROUP = ChatGroup(
     name="Taverna do Dragão Dorminhoco",
     scenario="Os heróis acabam de chegar em uma taverna mal iluminada, cheia de clientes barulhentos.",
     member_ids=["user-1", "bot-mestre", "bot-npc-1"],
-    messages=[] # Histórico de mensagens inicial vazio
+    messages=[]
 )
 
 
@@ -69,37 +69,38 @@ TEST_GROUP = ChatGroup(
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
     conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row  # Permite acessar colunas por nome
+    conn.row_factory = sqlite3.Row
     return conn
 
 
 # ----------------------------------------
-# --- Funções CRUD (CRIADAS ANTES DO init_db para evitar NameError) ---
+# --- Funções CRUD ---
 # ----------------------------------------
 
 # --- BOTS ---
 
 def save_bot(bot: Bot):
-    """Insere ou atualiza um bot no banco de dados, incluindo novos campos V2.1."""
+    """Insere ou atualiza um bot no banco de dados, incluindo novos campos V2.2."""
     conn = get_db_connection()
     conn.execute('''
         INSERT OR REPLACE INTO bots (
             id, creator_id, name, system_prompt, ai_config, 
-            gender, introduction, personality, welcome_message, conversation_context
+            gender, introduction, personality, welcome_message, conversation_context,
+            context_images  
         ) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         bot.bot_id, 
         bot.creator_id, 
         bot.name, 
-        bot.system_prompt, # Mantido por compatibilidade
+        bot.system_prompt, 
         json.dumps(bot.ai_config),
-        # Novos campos V2.1
         bot.gender,
         bot.introduction,
         bot.personality,
         bot.welcome_message,
-        bot.conversation_context
+        bot.conversation_context,
+        json.dumps(bot.context_images) # SALVANDO COMO JSON
     ))
     conn.commit()
     conn.close()
@@ -111,7 +112,6 @@ def get_bot(bot_id: str) -> Bot | None:
     conn.close()
     
     if bot_row:
-        # Puxa todos os campos, incluindo os novos
         return Bot(
             bot_id=bot_row['id'],
             creator_id=bot_row['creator_id'],
@@ -119,12 +119,15 @@ def get_bot(bot_id: str) -> Bot | None:
             system_prompt=bot_row['system_prompt'],
             ai_config=json.loads(bot_row['ai_config']),
             
-            # Novos campos V2.1
+            # Campos V2.1
             gender=bot_row['gender'],
             introduction=bot_row['introduction'],
             personality=bot_row['personality'],
             welcome_message=bot_row['welcome_message'],
-            conversation_context=bot_row['conversation_context']
+            conversation_context=bot_row['conversation_context'],
+            
+            # NOVO CAMPO V2.2
+            context_images=json.loads(bot_row['context_images'] or '[]')
         )
     return None
 
@@ -143,17 +146,20 @@ def get_all_bots() -> list[Bot]:
             system_prompt=row['system_prompt'],
             ai_config=json.loads(row['ai_config']),
             
-            # Novos campos V2.1
+            # Campos V2.1
             gender=row['gender'],
             introduction=row['introduction'],
             personality=row['personality'],
             welcome_message=row['welcome_message'],
-            conversation_context=row['conversation_context']
+            conversation_context=row['conversation_context'],
+            
+            # NOVO CAMPO V2.2
+            context_images=json.loads(row['context_images'] or '[]')
         ))
     return bots
 
 # --- USERS ---
-
+# ... (save_user, get_user, save_group, get_group, add_message_to_group, update_group_members permanecem iguais) ...
 def save_user(user: User):
     """Insere ou atualiza um usuário no banco de dados."""
     conn = get_db_connection()
@@ -181,8 +187,6 @@ def get_user(user_id: str) -> User | None:
             is_admin=bool(user_row['is_admin'])
         )
     return None
-
-# --- GROUPS (Grupos de Chat) ---
 
 def save_group(group: ChatGroup):
     """Salva todo o objeto ChatGroup (usado para inicialização e atualizações completas)."""
@@ -251,7 +255,6 @@ def update_group_members(group_id: str, member_ids: list[str]):
     conn.commit()
     conn.close()
 
-
 # Alias para a função de salvar mensagem, usada pelo main.py
 save_message = add_message_to_group
 
@@ -265,7 +268,7 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
 
-    # 1. Tabela Bots (COM OS NOVOS CAMPOS V2.1)
+    # 1. Tabela Bots (COM OS NOVOS CAMPOS V2.2)
     c.execute('''
         CREATE TABLE IF NOT EXISTS bots (
             id TEXT PRIMARY KEY,
@@ -277,9 +280,22 @@ def init_db():
             introduction TEXT NOT NULL,
             personality TEXT NOT NULL,
             welcome_message TEXT NOT NULL,
-            conversation_context TEXT NOT NULL
+            conversation_context TEXT NOT NULL,
+            context_images TEXT NOT NULL
         )
     ''')
+    conn.commit() # Commit inicial da criação da tabela
+
+    # MIGRAÇÃO: Adiciona o novo campo context_images se ele não existir
+    try:
+        # Tenta adicionar a coluna se ela ainda não estiver lá
+        c.execute("ALTER TABLE bots ADD COLUMN context_images TEXT DEFAULT '[]'")
+        conn.commit()
+        print("MIGRAÇÃO: Coluna 'context_images' adicionada à tabela 'bots'.")
+    except sqlite3.OperationalError as e:
+        # Se a coluna já existe, ou se for a primeira vez que cria, o erro é ignorado.
+        if "duplicate column name" not in str(e):
+             print(f"Erro na migração (tolerado): {e}")
 
     # 2. Tabela Grupos
     c.execute('''
