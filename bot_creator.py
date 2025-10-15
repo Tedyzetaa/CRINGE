@@ -9,20 +9,22 @@ from io import BytesIO
 # --- CONFIGURAÇÃO ---
 BACKEND_URL = "https://cringe-8h21.onrender.com"
 # Se estiver usando URL local: BACKEND_URL = "http://127.0.0.1:8080"
+MAX_IMAGE_UPLOAD = 15 # <-- NOVO LIMITE DEFINIDO AQUI
+MAX_IMAGE_SIZE_MB = 2
 
 st.set_page_config(
-    page_title="CRINGE RPG-AI: V2.2 - Criador de Bots Multimodal",
+    page_title="CRINGE RPG-AI: V2.3 - Criador de Bots Multimodal",
     layout="wide"
 )
 
-st.title("🤖 CRINGE RPG-AI: V2.2 - Criador de Agentes (Multimodal)")
+st.title("🤖 CRINGE RPG-AI: V2.3 - Criador de Agentes (Multimodal)")
 st.markdown("Crie agentes de IA com personalidade rica, contexto textual e *visual* (imagens/prints).")
 st.markdown("---")
 
 # Função para enviar a requisição de criação
 def create_bot(payload):
     try:
-        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=20) # Aumentado timeout
+        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=20)
         response.raise_for_status()
         
         st.success(f"🤖 Bot '{payload['name']}' criado com sucesso e salvo no SQLite!")
@@ -84,7 +86,7 @@ with st.form("bot_creation_form"):
         height=150
     )
 
-    # 4. Contexto de Conversação (Few-Shot/Grounding)
+    # 4. Contexto de Treinamento (Multimodal)
     st.subheader("📜 Contexto de Treinamento (Multimodal)")
     
     col_text, col_image = st.columns([1, 1])
@@ -99,7 +101,7 @@ with st.form("bot_creation_form"):
         
     with col_image:
         uploaded_files = st.file_uploader(
-            "Carregar Imagens/Prints (Máx: 3 arquivos, 2MB cada)", 
+            f"Carregar Imagens/Prints (Máx: {MAX_IMAGE_UPLOAD} arquivos, {MAX_IMAGE_SIZE_MB}MB cada)", # <-- ATUALIZADO NO TEXTO
             type=["png", "jpg", "jpeg"], 
             accept_multiple_files=True,
             key="image_uploader"
@@ -138,15 +140,15 @@ if submitted:
         # --- CONVERTER IMAGENS PARA DATA URI (Base64) ---
         context_data_uris = []
         if uploaded_files:
-            if len(uploaded_files) > 3:
-                st.warning("Limite de 3 imagens. Apenas as 3 primeiras serão usadas.")
-                uploaded_files = uploaded_files[:3]
+            if len(uploaded_files) > MAX_IMAGE_UPLOAD:
+                st.warning(f"Limite de {MAX_IMAGE_UPLOAD} imagens. Apenas as {MAX_IMAGE_UPLOAD} primeiras serão usadas.")
+                uploaded_files = uploaded_files[:MAX_IMAGE_UPLOAD] # <-- ATUALIZADO NA LÓGICA DE CORTE
                 
             for file in uploaded_files:
                 file_size_mb = file.size / (1024 * 1024)
                 
-                if file_size_mb > 2:
-                    st.warning(f"O arquivo {file.name} excedeu o limite de 2MB. Ignorando.")
+                if file_size_mb > MAX_IMAGE_SIZE_MB:
+                    st.warning(f"O arquivo {file.name} excedeu o limite de {MAX_IMAGE_SIZE_MB}MB. Ignorando.")
                     continue
                 
                 # Conversão para Base64
@@ -167,7 +169,7 @@ if submitted:
             "personality": bot_personality,
             "welcome_message": bot_welcome,
             "conversation_context": bot_context,
-            "context_images": context_data_uris, # ENVIANDO O BASE64
+            "context_images": context_data_uris,
             "system_prompt": "", 
             "ai_config": {
                 "temperature": bot_temperature,
