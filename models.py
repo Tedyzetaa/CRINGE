@@ -1,44 +1,43 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Any, Literal
+import time
+import uuid
 
-# --- Modelos Base ---
-
-class Message(BaseModel):
-    """Representa uma única mensagem no chat."""
-    sender_id: str = Field(..., description="ID do remetente (usuário ou bot).")
-    sender_type: str = Field(..., description="Tipo do remetente ('user' ou 'bot').")
-    text: str = Field(..., description="Conteúdo da mensagem.")
-    timestamp: float = Field(..., description="Carimbo de data/hora (Unix) da mensagem.")
+# --- 1. MODELOS DE DADOS BASE ---
 
 class User(BaseModel):
-    """Representa um usuário do aplicativo."""
-    user_id: str
+    """Representa um usuário ou jogador."""
+    user_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     username: str
+    is_admin: bool = False  # <--- CAMPO CRÍTICO ADICIONADO PARA O BANCO DE DADOS
+
+class Message(BaseModel):
+    """Representa uma única mensagem na conversa."""
+    sender_id: str
+    sender_type: Literal['user', 'bot']
+    text: str
+    timestamp: float = Field(default_factory=time.time)
 
 class Bot(BaseModel):
-    """Representa um Agente de IA (Bot) criado pelo usuário."""
-    bot_id: str
+    """Representa um Agente de IA com sua personalidade (system_prompt)."""
+    bot_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     creator_id: str
     name: str
-    system_prompt: str = Field(..., description="Instruções de personalidade e contexto para a IA.")
-    
-    # CORREÇÃO: Renomeado para evitar conflito com 'model_config' do Pydantic V2
-    ai_config: Dict[str, Any] = Field(default_factory=dict, description="Configurações do modelo (temperatura, etc.).")
-
-
-# --- Modelos de Chat e Grupo ---
+    system_prompt: str
+    ai_config: Dict[str, Any]  # Ex: {"temperature": 0.9, "max_output_tokens": 1024}
 
 class ChatGroup(BaseModel):
-    """Representa uma sala de chat de grupo (partida de RPG)."""
-    group_id: str
+    """Representa uma sala de chat com seus membros e histórico."""
+    group_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
-    member_ids: List[str] = Field(default_factory=list, description="IDs de usuários e bots (incluindo IA).")
-    messages: List[Message] = Field(default_factory=list)
-    scenario: Optional[str] = Field(None, description="Descrição do cenário/mundo do RPG.")
+    scenario: str
+    member_ids: List[str]  # Lista de user_id's e bot_id's ativos
+    messages: List[Message] = []
 
-# Estrutura de dados para uma nova mensagem recebida (Input)
+# --- 2. MODELOS DE DADOS PARA REQUISIÇÕES (INPUT) ---
+
 class NewMessage(BaseModel):
-    """Estrutura para enviar uma nova mensagem para um grupo."""
+    """Modelo usado para receber novas mensagens via POST."""
     group_id: str
     sender_id: str
     text: str
