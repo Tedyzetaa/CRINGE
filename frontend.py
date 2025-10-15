@@ -5,46 +5,48 @@ import time
 
 # --- CONFIGURAÇÃO ---
 # URL do seu backend CRINGE no Render.
+# Se você estiver testando localmente, mude para: "http://127.0.0.1:8080"
 BACKEND_URL = "https://cringe-8h21.onrender.com" 
 
 TEST_GROUP_ID = "group-123"
 TEST_USER_ID = "user-1"
 
 st.set_page_config(
-    page_title="CRINGE RPG-AI: Interface de Teste",
+    page_title="CRINGE RPG-AI: V2.0 - Chat Persistente",
     layout="wide"
 )
 
 # Título da Aplicação
-st.title("🎲 CRINGE RPG-AI: Teste de Grupo")
+st.title("🎲 CRINGE RPG-AI: V2.0 - Chat de Teste")
 
 # --- GERENCIAMENTO DE ESTADO E INICIALIZAÇÃO ---
 
-# Função para carregar dados do grupo e membros
 def load_initial_data(url):
-    """Carrega o histórico de mensagens e os nomes dos membros do backend."""
+    """Carrega o histórico de mensagens, membros e todos os bots disponíveis."""
     try:
-        # Aumenta o timeout para evitar erro na primeira conexão
-        response = requests.get(f"{url}/groups/{TEST_GROUP_ID}", timeout=10) 
-        response.raise_for_status()
-        group_data = response.json()
+        # Carrega dados do grupo (histórico e membros)
+        group_res = requests.get(f"{url}/groups/{TEST_GROUP_ID}", timeout=10) 
+        group_res.raise_for_status()
+        group_data = group_res.json()
         
-        # Armazena os nomes dos membros (usuários e bots)
+        # Carrega todos os bots disponíveis
+        bots_res = requests.get(f"{url}/bots/all", timeout=10)
+        bots_res.raise_for_status()
+        all_bots_data = bots_res.json()
+        
+        # 1. Armazena os nomes dos membros
         member_names = {}
-        for member_id in group_data.get('member_ids', []):
-            if member_id.startswith("user-"):
-                user_res = requests.get(f"{url}/users/{member_id}")
-                member_names[member_id] = user_res.json().get('username', 'Usuário Desconhecido')
-            elif member_id.startswith("bot-"):
-                if member_id == "bot-mestre":
-                    member_names[member_id] = "Mestre da Masmorra"
-                elif member_id == "bot-npc-1":
-                    member_names[member_id] = "Bardo Errante"
-                else:
-                    member_names[member_id] = member_id
-                    
+        for bot in all_bots_data:
+            member_names[bot['bot_id']] = bot['name']
+        
+        # Adiciona o nome do usuário de teste
+        user_res = requests.get(f"{url}/users/{TEST_USER_ID}")
+        member_names[TEST_USER_ID] = user_res.json().get('username', 'Usuário de Teste')
+        
         st.session_state.member_names = member_names
         st.session_state.messages = group_data.get('messages', [])
+        st.session_state.current_members = group_data.get('member_ids', [])
+        st.session_state.all_bots = all_bots_data
         st.session_state.error_loading = False
     except requests.exceptions.RequestException as e:
         st.session_state.messages = []
@@ -52,21 +54,104 @@ def load_initial_data(url):
         st.session_state.member_names = {}
         st.error(f"Erro ao conectar com o Backend: Certifique-se de que o backend está ativo em {url}. Detalhes: {e}")
 
-# Garante que os dados sejam carregados apenas uma vez
 if 'messages' not in st.session_state:
     load_initial_data(BACKEND_URL)
     
-# Se houve erro ao carregar, exibe e para
 if st.session_state.error_loading:
     st.stop()
 
 
-# --- FUNÇÃO PRINCIPAL: ENVIO ---
+# --- FUNÇÃO DE GERENCIAMENTO DE MEMBROS ---
 
-def send_message_to_backend(prompt: str):
-    """Envia a mensagem do usuário para o endpoint da API e atualiza o histórico."""
+def update_group_members(new_member_ids: list[str]):
+    """Envia a nova lista de membros para o backend para persistência."""
+    payload = {"member_ids": new_member_ids}
+    try:
+        response = requests.post(f"{BACKEND_URL}/groups/{TEST_GROUP_ID}/members", json=payload, timeout=5)
+        response.raise_for_status()
+        
+        st.session_state.current_members = response.json().get('member_ids', [])
+        st.success("Lista de membros atualizada com sucesso no banco de dados!")
+        st.rerun()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro ao atualizar membros no backend: {e}")
+
+
+# --- BARRA LATERAL (GERENCIAMENTO DE BOTS) ---
+
+with st.sidebar:
+    st.header("👥 Gerenciar Membros do Grupo")
+    st.markdown("---")
     
-    # 1. Adiciona a mensagem do usuário ao histórico local
+    st.subheader("Bots Disponíveis (SQLite)")
+    
+    # Cria uma lista de bot_ids para os bots que estão no grupo atualmente
+    active_bot_ids = [mid for mid in st.session_state.current_members if mid.startswith("bot-") and mid not in ["bot-mestre", TEST_USER_ID]]
+    
+    # Lista de todos os IDs de bots (excluindo o Mestre, que é obrigatório)
+    available_bot_ids = [bot['bot_id'] for bot in st.session_state.all_bots if bot['bot_id'] not in ["bot-mestre"]]
+    
+    # Cria o seletor mútiplo usando os nomes dos bots
+    selected_bot_names = st.multiselect(
+        "Adicionar/Remover Bots:",
+        options=[st.session_state.member_names[bot_id] for bot_id in available_bot_ids],
+        default=[st.session_state.member_names[bot_id] for bot_id in active_bot_ids],
+        help="Selecione os bots que devem responder no chat (além do Mestre da Masmorra)."
+    )
+    
+    # Mapeia nomes selecionados de volta para IDs
+    name_to_id = {v: k for k, v in st.session_state.member_names.items()}
+    newly_selected_ids = [name_to_id[name] for name in selected_bot_names]
+
+    # Garante que o Mestre e o Usuário de Teste estão sempre lá
+    final_members_list = list(set(newly_selected_ids + ["bot-mestre", TEST_USER_ID]))
+
+    if st.button("Aplicar Mudanças no Grupo"):
+        update_group_members(final_members_list)
+        
+    st.markdown("---")
+    
+    st.subheader("Membros Ativos:")
+    for mid in st.session_state.current_members:
+        icon = "👑" if mid == "bot-mestre" else "👤" if mid == TEST_USER_ID else "🤖"
+        st.write(f"{icon} {st.session_state.member_names.get(mid, mid)}")
+    
+    st.markdown("---")
+    st.caption(f"Backend CRINGE rodando em: **{BACKEND_URL}**")
+
+
+# --- INTERFACE DE CHAT ---
+
+chat_container = st.container(height=500, border=True)
+
+# Exibe todas as mensagens salvas no SQLite
+for message in st.session_state.messages:
+    sender_id = message['sender_id']
+    sender_type = message['sender_type']
+    
+    nome = st.session_state.member_names.get(sender_id, sender_id)
+    
+    if sender_type == 'user':
+        avatar = "👤"
+    elif sender_id == "bot-mestre":
+        avatar = "👑"
+    elif sender_id == "bot-npc-1":
+        avatar = "🎶"
+    else: 
+        avatar = "🤖"
+        
+    with chat_container:
+        st.chat_message(name=nome, avatar=avatar).write(message['text'])
+
+
+# 2. Entrada do Usuário
+prompt = st.chat_input("Digite sua ação ou mensagem para o grupo...")
+
+if prompt:
+    # 3. Processar a mensagem
+    # (Função que envia a mensagem para o backend, mesma de antes)
+    
+    # 1. Adiciona a mensagem do usuário ao histórico local (antes de enviar)
     st.session_state.messages.append({
         "sender_id": TEST_USER_ID,
         "sender_type": "user",
@@ -74,27 +159,20 @@ def send_message_to_backend(prompt: str):
         "timestamp": time.time()
     })
     
-    # 2. Constrói o corpo da requisição POST
     payload = {
         "group_id": TEST_GROUP_ID,
         "sender_id": TEST_USER_ID,
         "text": prompt
     }
     
-    # 3. Envia para o Backend (FastAPI)
     with st.spinner("🤖 Os Agentes de IA estão pensando..."):
         try:
-            # 30 segundos de timeout para dar tempo para as chamadas de IA
-            response = requests.post(f"{BACKEND_URL}/groups/send_message", json=payload, timeout=30) 
+            response = requests.post(f"{BACKEND_URL}/groups/send_message", json=payload, timeout=45) 
             response.raise_for_status()
             
-            # 4. Processa a resposta do Backend
             api_data = response.json()
-            
-            # O backend retorna as respostas dos bots em 'ai_responses'
             ai_responses = api_data.get("ai_responses", [])
             
-            # 5. Adiciona as respostas dos bots ao histórico
             for msg in ai_responses:
                  if msg['text'] and not msg['text'].startswith("Erro de IA:"):
                     st.session_state.messages.append(msg)
@@ -112,40 +190,3 @@ def send_message_to_backend(prompt: str):
             st.error("Erro: O backend retornou uma resposta inválida (não-JSON).")
         except Exception as e:
             st.error(f"Erro inesperado: {e}")
-
-
-# --- INTERFACE DE CHAT ---
-
-st.subheader(f"Grupo ID: {TEST_GROUP_ID}")
-chat_container = st.container(height=500, border=True)
-
-for message in st.session_state.messages:
-    sender_id = message['sender_id']
-    sender_type = message['sender_type']
-    
-    # Define o nome e avatar usando o dicionário carregado
-    nome = st.session_state.member_names.get(sender_id, sender_id)
-    
-    if sender_type == 'user':
-        avatar = "👤"
-    elif sender_id == "bot-mestre":
-        avatar = "👑"
-    elif sender_id == "bot-npc-1":
-        avatar = "🎶"
-    else: # Outros bots
-        avatar = "🤖"
-        
-    with chat_container:
-        st.chat_message(name=nome, avatar=avatar).write(message['text'])
-
-
-# 2. Entrada do Usuário
-prompt = st.chat_input("Digite sua ação ou mensagem para o grupo...")
-
-if prompt:
-    # 3. Processar a mensagem
-    send_message_to_backend(prompt)
-    
-# 4. Exibir o URL do Backend para referência
-st.sidebar.markdown("---")
-st.sidebar.caption(f"Backend CRINGE rodando em: **{BACKEND_URL}**")

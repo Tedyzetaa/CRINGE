@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from models import User, Bot, ChatGroup, NewMessage, Message
-# Importa o dicionário de bots para que a nova rota possa salvar
-from db import get_user, get_bot, get_group, save_message, DB_BOTS 
+# Importa as novas funções do db.py atualizado
+from db import get_user, get_bot, get_group, save_message, save_bot, get_all_bots, update_group_members 
 import time
 import os
 from dotenv import load_dotenv
@@ -26,8 +26,8 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # 1. Configuração Inicial e Aplicação
 # ----------------------------------------------------------------------
 app = FastAPI(
-    title="CRINGE RPG-AI Multi-Bot Backend",
-    description="API para gerenciar usuários, bots e grupos de chat com múltiplos agentes de IA."
+    title="CRINGE RPG-AI Multi-Bot Backend - V2.0",
+    description="API para gerenciar usuários, bots e grupos de chat com persistência SQLite."
 )
 
 # ----------------------------------------------------------------------
@@ -36,8 +36,7 @@ app = FastAPI(
 
 @app.get("/")
 def read_root():
-    # Versão atualizada para 1.2
-    return {"status": "OK", "version": "1.2", "message": "Backend do CRINGE RPG-AI está ativo!"}
+    return {"status": "OK", "version": "2.0", "message": "Backend do CRINGE RPG-AI está ativo com SQLite!"}
 
 @app.get("/groups/{group_id}")
 def get_chat_group(group_id: str) -> ChatGroup:
@@ -55,25 +54,56 @@ def get_user_details(user_id: str):
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
     return user
 
-# NOVA ROTA: Permite criar bots pelo Frontend
+# ROTA PARA CRIAÇÃO E LISTAGEM DE BOTS (USANDO SQLite)
 @app.post("/bots/create", response_model=Bot)
 def create_new_bot(new_bot: Bot):
-    """Cria um novo Bot de IA no banco de dados em memória."""
-    if new_bot.bot_id in DB_BOTS:
-        raise HTTPException(status_code=400, detail="Bot ID já existe.")
+    """Cria um novo Bot de IA e o salva no banco de dados persistente."""
+    if get_bot(new_bot.bot_id):
+        raise HTTPException(status_code=400, detail=f"Bot ID '{new_bot.bot_id}' já existe.")
         
-    DB_BOTS[new_bot.bot_id] = new_bot
+    save_bot(new_bot) # Usa a função save_bot do db.py (SQLite)
     return new_bot
+
+@app.get("/bots/all", response_model=list[Bot])
+def get_all_available_bots():
+    """Retorna a lista de todos os bots criados (do SQLite)."""
+    return get_all_bots()
+
+# NOVA ROTA: Adicionar/Remover Membros do Grupo
+class MemberUpdate(BaseModel):
+    member_ids: list[str]
+
+@app.post("/groups/{group_id}/members")
+def update_group_members_route(group_id: str, member_update: MemberUpdate):
+    """Atualiza a lista de membros de um grupo."""
+    group = get_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
+
+    # Remove o ID do usuário de teste (user-1) se estiver na lista de bots, para evitar erros
+    final_members = [mid for mid in member_update.member_ids if mid != "user-1"]
+    
+    # Garante que o usuário de teste (user-1) esteja sempre presente
+    if "user-1" not in final_members:
+        final_members.append("user-1")
+
+    # Garante que o Mestre da Masmorra (bot-mestre) esteja sempre presente
+    if "bot-mestre" not in final_members:
+        final_members.append("bot-mestre")
+        
+    update_group_members(group_id, final_members) # Usa a função de atualização do db.py
+    
+    return {"status": "success", "member_ids": final_members}
 
 
 # ----------------------------------------------------------------------
 # 3. Lógica do Gemini para um Único Bot - CORREÇÃO DE VERSÃO/ASSÍNCRONA
 # ----------------------------------------------------------------------
+# (Esta função permanece inalterada, usando a correção do Executor)
 
 async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -> Message:
     """Chama a API do Gemini para obter a resposta de um bot específico."""
     
-    # 1. Montar o histórico de mensagens para o Gemini
     contents = []
     
     for msg in group.messages[-10:]:
@@ -83,7 +113,6 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
 
         contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg.text)]))
 
-    # Adicionar a instrução do sistema (personalidade do bot e contexto)
     system_instruction = bot.system_prompt + (
         f"\n---\n"
         f"CONTEXTO DO CENÁRIO: {group.scenario}\n"
@@ -91,8 +120,6 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
         f"Se for o Mestre, descreva a cena. Se for um NPC, reaja como personagem."
     )
     
-    # 2. Configurar a chamada
-    # Usa Dict[str, Any] como tipo para garantir flexibilidade nas configurações
     ai_config_dict: Dict[str, Any] = bot.ai_config
     
     # Converte para o objeto GenerateContentConfig
@@ -113,7 +140,6 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
             )
         )
         
-        # 3. Formatar a resposta do Gemini
         return Message(
             sender_id=bot.bot_id,
             sender_type="bot",
@@ -137,7 +163,7 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
 @app.post("/groups/send_message")
 async def send_group_message(new_msg: NewMessage):
     """
-    Recebe uma mensagem de um usuário, salva e aciona a lógica da IA 
+    Recebe uma mensagem de um usuário, salva (no SQLite) e aciona a lógica da IA 
     para gerar respostas de múltiplos bots em paralelo.
     """
     group = get_group(new_msg.group_id)
@@ -158,7 +184,8 @@ async def send_group_message(new_msg: NewMessage):
     
     for member_id in group.member_ids:
         bot = get_bot(member_id)
-        if bot:
+        # Garante que só chame a IA para IDs que são bots
+        if bot and member_id != new_msg.sender_id: 
             task = get_bot_response(bot, group, new_msg.text)
             bot_tasks.append(task)
             
@@ -168,12 +195,11 @@ async def send_group_message(new_msg: NewMessage):
     # 4. Salvar as respostas geradas pelos bots e preparar o retorno
     final_responses = []
     for response_message in ai_responses:
-        # Salva apenas respostas válidas (sem a mensagem de erro debug)
         if response_message.text and not response_message.text.startswith("Erro de IA:"):
-            save_message(group.group_id, response_message)
+            # Salva no SQLite
+            save_message(group.group_id, response_message) 
             final_responses.append(response_message)
         elif response_message.text.startswith("Erro de IA:"):
-             # Retorna a mensagem de erro para debug no frontend
              final_responses.append(response_message)
 
     
