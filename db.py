@@ -174,6 +174,23 @@ def get_user(user_id: str) -> Optional[User]:
         return User(user_id=user_row['id'], username=user_row['username'], is_admin=bool(user_row['is_admin']))
     return None
 
+def save_group_only(group: ChatGroup):
+    """Salva ou atualiza um grupo, NÃO usado para adicionar mensagens."""
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT OR REPLACE INTO groups (id, name, scenario, member_ids, messages) 
+        VALUES (?, ?, ?, ?, ?)
+    ''', (
+        group.group_id, group.name, group.scenario, 
+        json.dumps(group.member_ids), 
+        json.dumps([msg.model_dump() for msg in group.messages]) 
+    ))
+    conn.commit()
+    conn.close()
+    
+save_group = save_group_only # Adiciona um alias para ser usado no SEEDING
+
+
 def get_group(group_id: str) -> Optional[ChatGroup]:
     conn = get_db_connection()
     group_row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
