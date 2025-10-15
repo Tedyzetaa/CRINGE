@@ -7,7 +7,7 @@ from models import User, Bot, Message, ChatGroup
 # --- Configuração do Banco de Dados ---
 DB_NAME = 'cringe_rpg.db'
 
-# --- Configuração dos Modelos de Teste (Serão inseridos no DB) ---
+# --- Configuração dos Modelos de Teste (V2.1 - COMPLETO) ---
 
 TEST_USER = User(
     user_id="user-1",
@@ -19,11 +19,19 @@ TEST_BOT_MASTER = Bot(
     bot_id="bot-mestre",
     creator_id="system",
     name="Mestre da Masmorra",
-    system_prompt=(
+    
+    # NOVOS CAMPOS ADICIONADOS (Corrigido o ValidationError)
+    gender='Indefinido',
+    introduction="O Narrador implacável do seu destino.",
+    personality=(
         "Você é o Mestre da Masmorra de um jogo de RPG de mesa. Sua função é narrar o cenário, "
         "descrever as ações dos NPCs e reagir às ações dos jogadores. Seja vívido e crie tensão. "
-        "Foque em descrever o ambiente e os desafios imediatos."
+        "Foque em descrever o ambiente e os desafios imediatos. Nunca use aspas."
     ),
+    welcome_message="Que os dados decidam seu destino! Onde você vai primeiro?",
+    conversation_context="O Mestre narra em blocos curtos e com tom neutro, focando em descrições ambientais.",
+    
+    system_prompt="", # Deixamos vazio, pois será construído no main.py
     ai_config={"temperature": 0.8, "max_output_tokens": 1024}
 )
 
@@ -31,11 +39,19 @@ TEST_BOT_BARD = Bot(
     bot_id="bot-npc-1",
     creator_id="system",
     name="Bardo Errante",
-    system_prompt=(
+    
+    # NOVOS CAMPOS ADICIONADOS (Corrigido o ValidationError)
+    gender='Masculino',
+    introduction="Um bardo com um alaúde que adora rimas ruins e piadas inoportunas.",
+    personality=(
         "Você é um Bardo Errante com uma paixão por rimas ruins e canções inoportunas. "
         "Sua função é sempre responder com uma rima, um verso, ou uma canção, não importa o quão sério seja o contexto. "
         "Sua personalidade é levemente cômica e dramática."
     ),
+    welcome_message="Ouço um chamado por canções! Digam o que desejam, em versos, por favor.",
+    conversation_context="Suas respostas sempre incluem uma rima ou trocadilho, e terminam com a assinatura: *canta uma canção sobre isso*",
+    
+    system_prompt="", # Deixamos vazio, pois será construído no main.py
     ai_config={"temperature": 0.9, "max_output_tokens": 512}
 )
 
@@ -52,52 +68,68 @@ TEST_GROUP = ChatGroup(
 
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
-    # O arquivo DB_NAME será criado na raiz do projeto no Render
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row  # Permite acessar colunas por nome
     return conn
 
 
 # ----------------------------------------
-# --- Funções CRUD (CRIADAS ANTES DO init_db) ---
+# --- Funções CRUD (CRIADAS ANTES DO init_db para evitar NameError) ---
 # ----------------------------------------
 
 # --- BOTS ---
 
 def save_bot(bot: Bot):
-    """Insere ou atualiza um bot no banco de dados."""
+    """Insere ou atualiza um bot no banco de dados, incluindo novos campos V2.1."""
     conn = get_db_connection()
     conn.execute('''
-        INSERT OR REPLACE INTO bots (id, creator_id, name, system_prompt, ai_config) 
-        VALUES (?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO bots (
+            id, creator_id, name, system_prompt, ai_config, 
+            gender, introduction, personality, welcome_message, conversation_context
+        ) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         bot.bot_id, 
         bot.creator_id, 
         bot.name, 
-        bot.system_prompt, 
-        json.dumps(bot.ai_config)
+        bot.system_prompt, # Mantido por compatibilidade
+        json.dumps(bot.ai_config),
+        # Novos campos V2.1
+        bot.gender,
+        bot.introduction,
+        bot.personality,
+        bot.welcome_message,
+        bot.conversation_context
     ))
     conn.commit()
     conn.close()
 
 def get_bot(bot_id: str) -> Bot | None:
-    """Busca um bot pelo ID."""
+    """Busca um bot pelo ID e reconstrói o objeto Bot, incluindo novos campos."""
     conn = get_db_connection()
     bot_row = conn.execute("SELECT * FROM bots WHERE id = ?", (bot_id,)).fetchone()
     conn.close()
     
     if bot_row:
+        # Puxa todos os campos, incluindo os novos
         return Bot(
             bot_id=bot_row['id'],
             creator_id=bot_row['creator_id'],
             name=bot_row['name'],
             system_prompt=bot_row['system_prompt'],
-            ai_config=json.loads(bot_row['ai_config'])
+            ai_config=json.loads(bot_row['ai_config']),
+            
+            # Novos campos V2.1
+            gender=bot_row['gender'],
+            introduction=bot_row['introduction'],
+            personality=bot_row['personality'],
+            welcome_message=bot_row['welcome_message'],
+            conversation_context=bot_row['conversation_context']
         )
     return None
 
 def get_all_bots() -> list[Bot]:
-    """Retorna todos os bots salvos, incluindo os criados pelo usuário."""
+    """Retorna todos os bots salvos, reconstruindo o objeto Bot completo."""
     conn = get_db_connection()
     bot_rows = conn.execute("SELECT * FROM bots").fetchall()
     conn.close()
@@ -109,7 +141,14 @@ def get_all_bots() -> list[Bot]:
             creator_id=row['creator_id'],
             name=row['name'],
             system_prompt=row['system_prompt'],
-            ai_config=json.loads(row['ai_config'])
+            ai_config=json.loads(row['ai_config']),
+            
+            # Novos campos V2.1
+            gender=row['gender'],
+            introduction=row['introduction'],
+            personality=row['personality'],
+            welcome_message=row['welcome_message'],
+            conversation_context=row['conversation_context']
         ))
     return bots
 
@@ -226,14 +265,19 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
 
-    # 1. Tabela Bots
+    # 1. Tabela Bots (COM OS NOVOS CAMPOS V2.1)
     c.execute('''
         CREATE TABLE IF NOT EXISTS bots (
             id TEXT PRIMARY KEY,
             creator_id TEXT NOT NULL,
             name TEXT NOT NULL,
             system_prompt TEXT NOT NULL,
-            ai_config TEXT NOT NULL
+            ai_config TEXT NOT NULL,
+            gender TEXT NOT NULL,
+            introduction TEXT NOT NULL,
+            personality TEXT NOT NULL,
+            welcome_message TEXT NOT NULL,
+            conversation_context TEXT NOT NULL
         )
     ''')
 
@@ -262,7 +306,6 @@ def init_db():
     # 4. Inserir dados iniciais (SEEDING)
     if c.execute("SELECT COUNT(*) FROM bots").fetchone()[0] == 0:
         print("SEEDING: Inserindo dados iniciais no DB.")
-        # Chamamos save_bot AGORA, pois save_bot JÁ FOI DEFINIDO ACIMA.
         save_bot(TEST_BOT_MASTER) 
         save_bot(TEST_BOT_BARD)
         save_user(TEST_USER)
@@ -272,5 +315,4 @@ def init_db():
     conn.close()
 
 # Garante que o DB seja inicializado ao carregar o módulo
-# Esta é a última linha, e ela chama init_db(), que chama save_bot()
 init_db()
