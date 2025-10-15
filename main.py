@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel # <-- CAMPO ADICIONADO AQUI
 from models import User, Bot, ChatGroup, NewMessage, Message
-# Importa as novas funções do db.py atualizado
 from db import get_user, get_bot, get_group, save_message, save_bot, get_all_bots, update_group_members 
 import time
 import os
