@@ -1,24 +1,53 @@
 import sqlite3
 import json
 import time
-from models import User, Bot, Message, ChatGroup
+from typing import List, Optional
 
 # --- Configuração do Banco de Dados ---
 DB_NAME = 'cringe_rpg.db'
 
-# --- Configuração dos Modelos de Teste (V2.3) ---
+# --- Definições de Modelos Simples (Para evitar dependência externa) ---
+class SimpleModel:
+    """Classe base simples para simular Pydantic BaseModel para fins de serialização interna."""
+    def __init__(self, **kwargs):
+        # Garante que campos não definidos no init do db.py sejam aceitos
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    def model_dump(self):
+        return self.__dict__
+    
+class User(SimpleModel): 
+    def __init__(self, user_id: str, username: str, is_admin: bool):
+        super().__init__(user_id=user_id, username=username, is_admin=is_admin)
 
-TEST_USER = User(
-    user_id="user-1",
-    username="Herói Teste",
-    is_admin=True
-)
+class Message(SimpleModel): 
+    def __init__(self, sender_id: str, sender_type: str, text: str, timestamp: float):
+        super().__init__(sender_id=sender_id, sender_type=sender_type, text=text, timestamp=timestamp)
+
+class Bot(SimpleModel):
+    def __init__(self, bot_id: str, creator_id: str, name: str, system_prompt: str, ai_config: dict,
+                 gender: str, introduction: str, personality: str, welcome_message: str, 
+                 conversation_context: str, context_images: List[str]):
+        super().__init__(
+            bot_id=bot_id, creator_id=creator_id, name=name, system_prompt=system_prompt, 
+            ai_config=ai_config, gender=gender, introduction=introduction, 
+            personality=personality, welcome_message=welcome_message, 
+            conversation_context=conversation_context, context_images=context_images
+        )
+
+class ChatGroup(SimpleModel):
+    def __init__(self, group_id: str, name: str, scenario: str, member_ids: List[str], messages: List[Message]):
+        super().__init__(group_id=group_id, name=name, scenario=scenario, member_ids=member_ids, messages=messages)
+
+
+# --- Configuração dos Modelos de Teste ---
+
+TEST_USER = User(user_id="user-1", username="Herói Teste", is_admin=True)
 
 TEST_BOT_MASTER = Bot(
     bot_id="bot-mestre",
     creator_id="system",
     name="Mestre da Masmorra",
-    
     gender='Indefinido',
     introduction="O Narrador implacável do seu destino.",
     personality=(
@@ -29,8 +58,6 @@ TEST_BOT_MASTER = Bot(
     welcome_message="Que os dados decidam seu destino! Onde você vai primeiro?",
     conversation_context="O Mestre narra em blocos curtos e com tom neutro, focando em descrições ambientais.",
     context_images=[],
-    
-    system_prompt="", 
     ai_config={"temperature": 0.8, "max_output_tokens": 1024}
 )
 
@@ -38,7 +65,6 @@ TEST_BOT_BARD = Bot(
     bot_id="bot-npc-1",
     creator_id="system",
     name="Bardo Errante",
-    
     gender='Masculino',
     introduction="Um bardo com um alaúde que adora rimas ruins e piadas inoportunas.",
     personality=(
@@ -49,8 +75,6 @@ TEST_BOT_BARD = Bot(
     welcome_message="Ouço um chamado por canções! Digam o que desejam, em versos, por favor.",
     conversation_context="Suas respostas sempre incluem uma rima ou trocadilho, e terminam com a assinatura: *canta uma canção sobre isso*",
     context_images=[],
-    
-    system_prompt="", 
     ai_config={"temperature": 0.9, "max_output_tokens": 512}
 )
 
@@ -58,7 +82,7 @@ TEST_GROUP = ChatGroup(
     group_id="group-123",
     name="Taverna do Dragão Dorminhoco",
     scenario="Os heróis acabam de chegar em uma taverna mal iluminada, cheia de clientes barulhentos.",
-    member_ids=["user-1", "bot-mestre", "bot-npc-1"],
+    member_ids=["user-1", "bot-npc-1"], # Mestre desativado por padrão
     messages=[]
 )
 
@@ -76,10 +100,7 @@ def get_db_connection():
 # --- Funções CRUD ---
 # ----------------------------------------
 
-# --- BOTS ---
-
 def save_bot(bot: Bot):
-    """Insere ou atualiza um bot no banco de dados, incluindo novos campos V2.2."""
     conn = get_db_connection()
     conn.execute('''
         INSERT OR REPLACE INTO bots (
@@ -89,162 +110,103 @@ def save_bot(bot: Bot):
         ) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
-        bot.bot_id, 
-        bot.creator_id, 
-        bot.name, 
-        bot.system_prompt, 
-        json.dumps(bot.ai_config),
-        bot.gender,
-        bot.introduction,
-        bot.personality,
-        bot.welcome_message,
-        bot.conversation_context,
-        json.dumps(bot.context_images) 
+        bot.bot_id, bot.creator_id, bot.name, bot.system_prompt, json.dumps(bot.ai_config),
+        bot.gender, bot.introduction, bot.personality, bot.welcome_message, 
+        bot.conversation_context, json.dumps(bot.context_images) 
     ))
     conn.commit()
     conn.close()
 
-def get_bot(bot_id: str) -> Bot | None:
-    """Busca um bot pelo ID e reconstrói o objeto Bot, incluindo novos campos."""
+def get_bot(bot_id: str) -> Optional[Bot]:
     conn = get_db_connection()
     bot_row = conn.execute("SELECT * FROM bots WHERE id = ?", (bot_id,)).fetchone()
     conn.close()
     
     if bot_row:
+        context_images_data = bot_row['context_images'] if bot_row['context_images'] else '[]'
         return Bot(
-            bot_id=bot_row['id'],
-            creator_id=bot_row['creator_id'],
-            name=bot_row['name'],
-            system_prompt=bot_row['system_prompt'],
-            ai_config=json.loads(bot_row['ai_config']),
-            
-            gender=bot_row['gender'],
-            introduction=bot_row['introduction'],
-            personality=bot_row['personality'],
-            welcome_message=bot_row['welcome_message'],
+            bot_id=bot_row['id'], creator_id=bot_row['creator_id'], name=bot_row['name'],
+            system_prompt=bot_row['system_prompt'], ai_config=json.loads(bot_row['ai_config']),
+            gender=bot_row['gender'], introduction=bot_row['introduction'], 
+            personality=bot_row['personality'], welcome_message=bot_row['welcome_message'],
             conversation_context=bot_row['conversation_context'],
-            
-            context_images=json.loads(bot_row['context_images'] or '[]')
+            context_images=json.loads(context_images_data)
         )
     return None
 
-def get_all_bots() -> list[Bot]:
-    """Retorna todos os bots salvos, reconstruindo o objeto Bot completo."""
+def get_all_bots() -> List[Bot]:
     conn = get_db_connection()
     bot_rows = conn.execute("SELECT * FROM bots").fetchall()
     conn.close()
     
     bots = []
     for row in bot_rows:
+        context_images_data = row['context_images'] if row['context_images'] else '[]'
         bots.append(Bot(
-            bot_id=row['id'],
-            creator_id=row['creator_id'],
-            name=row['name'],
-            system_prompt=row['system_prompt'],
-            ai_config=json.loads(row['ai_config']),
-            
-            gender=row['gender'],
-            introduction=row['introduction'],
-            personality=row['personality'],
-            welcome_message=row['welcome_message'],
+            bot_id=row['id'], creator_id=row['creator_id'], name=row['name'],
+            system_prompt=row['system_prompt'], ai_config=json.loads(row['ai_config']),
+            gender=row['gender'], introduction=row['introduction'], 
+            personality=row['personality'], welcome_message=row['welcome_message'],
             conversation_context=row['conversation_context'],
-            
-            context_images=json.loads(row['context_images'] or '[]')
+            context_images=json.loads(context_images_data)
         ))
     return bots
 
-# --- USERS ---
-
 def save_user(user: User):
-    """Insere ou atualiza um usuário no banco de dados."""
     conn = get_db_connection()
     conn.execute('''
         INSERT OR REPLACE INTO users (id, username, is_admin) 
         VALUES (?, ?, ?)
-    ''', (
-        user.user_id, 
-        user.username, 
-        user.is_admin
-    ))
+    ''', (user.user_id, user.username, user.is_admin))
     conn.commit()
     conn.close()
 
-def get_user(user_id: str) -> User | None:
-    """Busca um usuário pelo ID."""
+def get_user(user_id: str) -> Optional[User]:
     conn = get_db_connection()
     user_row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     conn.close()
     
     if user_row:
-        return User(
-            user_id=user_row['id'],
-            username=user_row['username'],
-            is_admin=bool(user_row['is_admin'])
-        )
+        return User(user_id=user_row['id'], username=user_row['username'], is_admin=bool(user_row['is_admin']))
     return None
 
-def save_group(group: ChatGroup):
-    """Salva todo o objeto ChatGroup (usado para inicialização e atualizações completas)."""
-    conn = get_db_connection()
-    conn.execute('''
-        INSERT OR REPLACE INTO groups (id, name, scenario, member_ids, messages) 
-        VALUES (?, ?, ?, ?, ?)
-    ''', (
-        group.group_id, 
-        group.name, 
-        group.scenario, 
-        json.dumps(group.member_ids),
-        json.dumps([msg.model_dump() for msg in group.messages])
-    ))
-    conn.commit()
-    conn.close()
-
-def get_group(group_id: str) -> ChatGroup | None:
-    """Busca um grupo e reconstrói o objeto ChatGroup a partir do DB."""
+def get_group(group_id: str) -> Optional[ChatGroup]:
     conn = get_db_connection()
     group_row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
     conn.close()
     
     if group_row:
-        messages_data = json.loads(group_row['messages'])
-        messages = [Message(**msg) for msg in messages_data]
-        member_ids = json.loads(group_row['member_ids'])
+        messages_data = json.loads(group_row['messages']) if group_row['messages'] else []
+        member_ids = json.loads(group_row['member_ids']) if group_row['member_ids'] else []
+
+        messages = [Message(**msg) for msg in messages_data] if isinstance(messages_data, list) else []
 
         return ChatGroup(
-            group_id=group_row['id'],
-            name=group_row['name'],
-            scenario=group_row['scenario'],
-            member_ids=member_ids,
-            messages=messages
+            group_id=group_row['id'], name=group_row['name'], scenario=group_row['scenario'],
+            member_ids=member_ids, messages=messages
         )
     return None
 
+def update_group_members(group_id: str, member_ids: List[str]):
+    conn = get_db_connection()
+    conn.execute('''
+        UPDATE groups SET member_ids = ? WHERE id = ?
+    ''', (json.dumps(member_ids), group_id))
+    conn.commit()
+    conn.close()
+
 def add_message_to_group(group_id: str, message: Message):
-    """Adiciona uma nova mensagem ao histórico do grupo."""
     group = get_group(group_id)
     if not group:
         return
         
     group.messages.append(message)
     
-    # Serializa e salva o objeto de grupo atualizado
     conn = get_db_connection()
     conn.execute('''
         UPDATE groups SET messages = ? WHERE id = ?
     ''', (
         json.dumps([msg.model_dump() for msg in group.messages]),
-        group_id
-    ))
-    conn.commit()
-    conn.close()
-
-def update_group_members(group_id: str, member_ids: list[str]):
-    """Atualiza a lista de membros do grupo."""
-    conn = get_db_connection()
-    conn.execute('''
-        UPDATE groups SET member_ids = ? WHERE id = ?
-    ''', (
-        json.dumps(member_ids),
         group_id
     ))
     conn.commit()
@@ -262,7 +224,7 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
 
-    # 1. Tabela Bots (COM OS NOVOS CAMPOS V2.2)
+    # 1. Tabela Bots 
     c.execute('''
         CREATE TABLE IF NOT EXISTS bots (
             id TEXT PRIMARY KEY,
@@ -275,19 +237,10 @@ def init_db():
             personality TEXT NOT NULL,
             welcome_message TEXT NOT NULL,
             conversation_context TEXT NOT NULL,
-            context_images TEXT NOT NULL
+            context_images TEXT DEFAULT '[]' 
         )
     ''')
     conn.commit()
-
-    # MIGRAÇÃO: Adiciona o novo campo context_images se ele não existir
-    try:
-        c.execute("ALTER TABLE bots ADD COLUMN context_images TEXT DEFAULT '[]'")
-        conn.commit()
-        print("MIGRAÇÃO: Coluna 'context_images' adicionada à tabela 'bots'.")
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" not in str(e):
-             print(f"Erro na migração (tolerado): {e}")
 
     # 2. Tabela Grupos
     c.execute('''
@@ -322,4 +275,5 @@ def init_db():
         
     conn.close()
 
+# Executa a inicialização ao carregar o módulo
 init_db()
