@@ -48,6 +48,8 @@ TEST_BOT_MASTER = Bot(
     bot_id="bot-mestre",
     creator_id="system",
     name="Mestre da Masmorra",
+    # FIX: Adicionado o argumento 'system_prompt'
+    system_prompt="Você é o Mestre da Masmorra, um narrador de RPG experiente.", 
     gender='Indefinido',
     introduction="O Narrador implacável do seu destino.",
     personality=(
@@ -65,6 +67,8 @@ TEST_BOT_BARD = Bot(
     bot_id="bot-npc-1",
     creator_id="system",
     name="Bardo Errante",
+    # FIX: Adicionado o argumento 'system_prompt'
+    system_prompt="Você é um Bardo Errante que se comunica através de rimas ruins.", 
     gender='Masculino',
     introduction="Um bardo com um alaúde que adora rimas ruins e piadas inoportunas.",
     personality=(
