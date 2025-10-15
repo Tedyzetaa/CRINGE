@@ -4,7 +4,8 @@ import json
 import uuid
 
 # --- CONFIGURAÇÃO ---
-BACKEND_URL = "http://127.0.0.1:8080"
+# URL do seu backend CRINGE no Render.
+BACKEND_URL = "https://cringe-8h21.onrender.com"
 TEST_CREATOR_ID = "user-1" # ID do usuário criador
 
 st.set_page_config(
@@ -37,7 +38,7 @@ def submit_bot(bot_data):
     
     # 3. Envia a requisição POST
     try:
-        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload)
+        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=10)
         response.raise_for_status()
         
         st.success(f"🤖 Bot '{payload['name']}' criado com sucesso! ID: **{bot_id}**")
@@ -45,7 +46,7 @@ def submit_bot(bot_data):
         return response.json()
         
     except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao criar Bot. Verifique se o Backend está ativo. Detalhes: {e}")
+        st.error(f"Erro ao criar Bot. Verifique se o Backend está ativo em {BACKEND_URL}. Detalhes: {e}")
     except Exception as e:
         st.error(f"Erro inesperado: {e}")
 
@@ -65,13 +66,11 @@ with st.form("bot_creation_form"):
     col1, col2 = st.columns(2)
     
     with col1:
-        # A temperatura controla a aleatoriedade: 0 é determinístico, 1 é criativo
         temperature = st.slider("Temperatura (Criatividade):", 
                                 min_value=0.0, max_value=1.0, value=0.7, step=0.05,
                                 help="Valores mais altos (perto de 1.0) tornam a resposta mais criativa e menos previsível.")
     
     with col2:
-        # Limite o tamanho da resposta para evitar sobrecarga de chat
         max_tokens = st.slider("Tokens Máximos na Resposta:", 
                                min_value=128, max_value=2048, value=1024, step=128,
                                help="O tamanho máximo que a resposta da IA pode ter.")
@@ -91,4 +90,4 @@ with st.form("bot_creation_form"):
             submit_bot(bot_data)
 
 st.markdown("---")
-st.caption(f"Backend ativo em: {BACKEND_URL}")
+st.caption(f"Backend ativo em: **{BACKEND_URL}**")
