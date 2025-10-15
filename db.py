@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import time
+# Importe corretamente os modelos de dados
 from models import User, Bot, Message, ChatGroup
 
 # --- Configuração do Banco de Dados ---
@@ -47,71 +48,19 @@ TEST_GROUP = ChatGroup(
 )
 
 
-# --- Funções de Inicialização e Conexão ---
+# --- Funções de Conexão ---
 
 def get_db_connection():
     """Cria e retorna uma conexão com o banco de dados."""
+    # O arquivo DB_NAME será criado na raiz do projeto no Render
     conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row  # Isso permite acessar colunas por nome
+    conn.row_factory = sqlite3.Row  # Permite acessar colunas por nome
     return conn
 
-def init_db():
-    """Inicializa o banco de dados e as tabelas, se não existirem."""
-    conn = get_db_connection()
-    c = conn.cursor()
 
-    # 1. Tabela Bots (Persistência dos Agentes de IA)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS bots (
-            id TEXT PRIMARY KEY,
-            creator_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            system_prompt TEXT NOT NULL,
-            ai_config TEXT NOT NULL -- Armazenado como JSON
-        )
-    ''')
-
-    # 2. Tabela Grupos (Persistência do Chat e Membros)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS groups (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            scenario TEXT NOT NULL,
-            member_ids TEXT NOT NULL, -- Armazenado como JSON list
-            messages TEXT NOT NULL -- Armazenado como JSON list de Messages
-        )
-    ''')
-
-    # 3. Tabela Usuários (Mínima)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            is_admin INTEGER NOT NULL
-        )
-    ''')
-    
-    conn.commit()
-    
-    # 4. Inserir dados iniciais (se o DB estiver vazio)
-    if c.execute("SELECT COUNT(*) FROM bots").fetchone()[0] == 0:
-        print("SEEDING: Inserindo dados iniciais no DB.")
-        # Bots
-        save_bot(TEST_BOT_MASTER)
-        save_bot(TEST_BOT_BARD)
-        # Usuário
-        save_user(TEST_USER)
-        # Grupo (Inicializa o histórico de mensagens como JSON vazio)
-        save_group(TEST_GROUP)
-        print("SEEDING: Dados iniciais inseridos com sucesso.")
-        
-    conn.close()
-
-# Garante que o DB seja inicializado ao carregar o módulo
-init_db()
-
-
-# --- Funções CRUD ---
+# ----------------------------------------
+# --- Funções CRUD (CRIADAS ANTES DO init_db) ---
+# ----------------------------------------
 
 # --- BOTS ---
 
@@ -138,7 +87,6 @@ def get_bot(bot_id: str) -> Bot | None:
     conn.close()
     
     if bot_row:
-        # Reconstrói o objeto Bot a partir da linha do DB
         return Bot(
             bot_id=bot_row['id'],
             creator_id=bot_row['creator_id'],
@@ -149,7 +97,7 @@ def get_bot(bot_id: str) -> Bot | None:
     return None
 
 def get_all_bots() -> list[Bot]:
-    """NOVA FUNÇÃO: Retorna todos os bots salvos, incluindo os criados pelo usuário."""
+    """Retorna todos os bots salvos, incluindo os criados pelo usuário."""
     conn = get_db_connection()
     bot_rows = conn.execute("SELECT * FROM bots").fetchall()
     conn.close()
@@ -198,7 +146,7 @@ def get_user(user_id: str) -> User | None:
 # --- GROUPS (Grupos de Chat) ---
 
 def save_group(group: ChatGroup):
-    """Salva todo o objeto ChatGroup (usado para inicialização)."""
+    """Salva todo o objeto ChatGroup (usado para inicialização e atualizações completas)."""
     conn = get_db_connection()
     conn.execute('''
         INSERT OR REPLACE INTO groups (id, name, scenario, member_ids, messages) 
@@ -220,11 +168,8 @@ def get_group(group_id: str) -> ChatGroup | None:
     conn.close()
     
     if group_row:
-        # Deserializa a lista de mensagens JSON de volta para lista[Message]
         messages_data = json.loads(group_row['messages'])
         messages = [Message(**msg) for msg in messages_data]
-        
-        # Deserializa a lista de membros JSON
         member_ids = json.loads(group_row['member_ids'])
 
         return ChatGroup(
@@ -240,7 +185,6 @@ def add_message_to_group(group_id: str, message: Message):
     """Adiciona uma nova mensagem ao histórico do grupo."""
     group = get_group(group_id)
     if not group:
-        # Se o grupo não for encontrado, não faz nada
         return
         
     group.messages.append(message)
@@ -257,7 +201,7 @@ def add_message_to_group(group_id: str, message: Message):
     conn.close()
 
 def update_group_members(group_id: str, member_ids: list[str]):
-    """NOVA FUNÇÃO: Atualiza a lista de membros do grupo."""
+    """Atualiza a lista de membros do grupo."""
     conn = get_db_connection()
     conn.execute('''
         UPDATE groups SET member_ids = ? WHERE id = ?
@@ -271,3 +215,62 @@ def update_group_members(group_id: str, member_ids: list[str]):
 
 # Alias para a função de salvar mensagem, usada pelo main.py
 save_message = add_message_to_group
+
+
+# ----------------------------------------
+# --- Funções de Inicialização (Chamadas por último) ---
+# ----------------------------------------
+
+def init_db():
+    """Inicializa o banco de dados e as tabelas, se não existirem."""
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # 1. Tabela Bots
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS bots (
+            id TEXT PRIMARY KEY,
+            creator_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            system_prompt TEXT NOT NULL,
+            ai_config TEXT NOT NULL
+        )
+    ''')
+
+    # 2. Tabela Grupos
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            scenario TEXT NOT NULL,
+            member_ids TEXT NOT NULL,
+            messages TEXT NOT NULL
+        )
+    ''')
+
+    # 3. Tabela Usuários
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            is_admin INTEGER NOT NULL
+        )
+    ''')
+    
+    conn.commit()
+    
+    # 4. Inserir dados iniciais (SEEDING)
+    if c.execute("SELECT COUNT(*) FROM bots").fetchone()[0] == 0:
+        print("SEEDING: Inserindo dados iniciais no DB.")
+        # Chamamos save_bot AGORA, pois save_bot JÁ FOI DEFINIDO ACIMA.
+        save_bot(TEST_BOT_MASTER) 
+        save_bot(TEST_BOT_BARD)
+        save_user(TEST_USER)
+        save_group(TEST_GROUP)
+        print("SEEDING: Dados iniciais inseridos com sucesso.")
+        
+    conn.close()
+
+# Garante que o DB seja inicializado ao carregar o módulo
+# Esta é a última linha, e ela chama init_db(), que chama save_bot()
+init_db()
