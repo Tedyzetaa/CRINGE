@@ -2,92 +2,144 @@ import streamlit as st
 import requests
 import json
 import uuid
+import time
 
 # --- CONFIGURAÇÃO ---
-# URL do seu backend CRINGE no Render.
 BACKEND_URL = "https://cringe-8h21.onrender.com"
-TEST_CREATOR_ID = "user-1" # ID do usuário criador
+# Se estiver usando URL local: BACKEND_URL = "http://127.0.0.1:8080"
 
 st.set_page_config(
-    page_title="CRINGE: Criador de Agentes de IA",
-    layout="centered"
+    page_title="CRINGE RPG-AI: V2.1 - Criador de Bots",
+    layout="wide"
 )
 
-st.title("🤖 Criador de Agentes de IA (Bots)")
-st.subheader("Defina a Personalidade e o Comportamento do seu Agente")
+st.title("🤖 CRINGE RPG-AI: V2.1 - Criador de Agentes")
+st.markdown("Use este formulário para criar um novo agente (Mestre ou NPC) com personalidade e contexto ricos. Os bots criados são salvos permanentemente no banco de dados SQLite.")
+st.markdown("---")
 
-# --- Função de Submissão ---
-
-def submit_bot(bot_data):
-    """Envia os dados do novo bot para o backend (FastAPI)."""
-    
-    # 1. Cria um ID único
-    bot_id = f"bot-{uuid.uuid4().hex[:8]}"
-    
-    # 2. Constrói o Payload completo
-    payload = {
-        "bot_id": bot_id,
-        "creator_id": TEST_CREATOR_ID,
-        "name": bot_data["name"],
-        "system_prompt": bot_data["system_prompt"],
-        "ai_config": {
-            "temperature": bot_data["temperature"],
-            "max_output_tokens": bot_data["max_tokens"]
-        }
-    }
-    
-    # 3. Envia a requisição POST
+# Função para enviar a requisição de criação
+def create_bot(payload):
     try:
-        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=10)
+        response = requests.post(f"{BACKEND_URL}/bots/create", json=payload, timeout=15)
         response.raise_for_status()
         
-        st.success(f"🤖 Bot '{payload['name']}' criado com sucesso! ID: **{bot_id}**")
+        st.success(f"🤖 Bot '{payload['name']}' criado com sucesso e salvo no SQLite!")
         st.balloons()
-        return response.json()
         
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao criar Bot. Verifique se o Backend está ativo em {BACKEND_URL}. Detalhes: {e}")
-    except Exception as e:
-        st.error(f"Erro inesperado: {e}")
+        # Limpa o formulário após o sucesso
+        st.session_state.clear()
+        st.rerun()
 
-# --- Formulário Streamlit ---
+    except requests.exceptions.HTTPError as e:
+        # Tenta extrair a mensagem de erro do JSON
+        try:
+            error_detail = response.json().get('detail', str(e))
+        except:
+            error_detail = str(e)
+            
+        st.error(f"Erro HTTP ao criar o bot. Detalhes: {error_detail}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro de Conexão: Não foi possível se conectar ao Backend em {BACKEND_URL}. ({e})")
+
+# --------------------------
+# --- FORMULÁRIO STREAMLIT ---
+# --------------------------
 
 with st.form("bot_creation_form"):
-    st.markdown("### 1. Detalhes Básicos")
-    bot_name = st.text_input("Nome do Agente (Ex: Mestre Sombrio, Elfo Bardo):", 
-                             max_chars=50)
     
-    st.markdown("### 2. Personalidade e Prompt")
-    system_prompt = st.text_area("Instrução do Sistema (System Prompt):", 
-                                 help="Descreva a personalidade, o papel e as regras do seu bot. (Ex: 'Você é um oráculo cego e misterioso que responde apenas em enigmas e rimas.')",
-                                 height=200)
-
-    st.markdown("### 3. Configurações da IA (Gemini)")
-    col1, col2 = st.columns(2)
+    # 1. Informações Básicas
+    col1, col2 = st.columns([1, 1])
     
     with col1:
-        temperature = st.slider("Temperatura (Criatividade):", 
-                                min_value=0.0, max_value=1.0, value=0.7, step=0.05,
-                                help="Valores mais altos (perto de 1.0) tornam a resposta mais criativa e menos previsível.")
-    
-    with col2:
-        max_tokens = st.slider("Tokens Máximos na Resposta:", 
-                               min_value=128, max_value=2048, value=1024, step=128,
-                               help="O tamanho máximo que a resposta da IA pode ter.")
+        bot_name = st.text_input("Nome do Agente", placeholder="Ex: Grog, o Bárbaro", max_chars=50)
         
-    submitted = st.form_submit_button("Criar Bot de IA")
+    with col2:
+        bot_gender = st.selectbox(
+            "Gênero",
+            options=['Masculino', 'Feminino', 'Não Binário', 'Indefinido']
+        )
+        
+    # 2. Introdução e Boas-Vindas
+    st.subheader("📚 Detalhes da Persona")
+    bot_intro = st.text_area(
+        "Introdução / Breve Descrição",
+        placeholder="Um Bárbaro de dois metros de altura, irritadiço e com um senso de humor duvidoso. Não gosta de elfos.",
+        help="Esta é uma descrição curta usada para introduzir o bot em um cenário.",
+        height=70
+    )
     
-    if submitted:
-        if not bot_name or not system_prompt:
-            st.error("Por favor, preencha o Nome e o Prompt do Sistema.")
-        else:
-            bot_data = {
-                "name": bot_name,
-                "system_prompt": system_prompt,
-                "temperature": temperature,
-                "max_tokens": max_tokens
-            }
-            submit_bot(bot_data)
+    bot_welcome = st.text_input(
+        "Mensagem de Boas-Vindas (Opcional)",
+        placeholder="Por que vocês estão me incomodando? Falem logo!",
+        help="A primeira frase que o bot dirá quando for acionado ou no início de um chat.",
+        max_chars=200
+    )
+    
+    # 3. Personalidade (System Prompt Core)
+    st.subheader("🧠 Núcleo de Personalidade (Obrigatório)")
+    bot_personality = st.text_area(
+        "Personalidade Detalhada (System Prompt)",
+        placeholder="Você é um Mestre de Masmorra que valoriza a ação e a brutalidade. Seu tom é cínico e sarcástico, e você só narra eventos violentos.",
+        help="As regras e a descrição de personalidade que o modelo Gemini deve seguir em todas as interações. **Seja o mais específico possível.**",
+        height=150
+    )
 
-st.markdown("---")
-st.caption(f"Backend ativo em: **{BACKEND_URL}**")
+    # 4. Contexto de Conversação (Few-Shot/Grounding)
+    st.subheader("📜 Exemplos de Conversa (Melhora a Performance)")
+    bot_context = st.text_area(
+        "Exemplos, Links ou Contexto de Lore",
+        placeholder="Ex: 'Usuário: Eu ataco o dragão. Agente: Você erra miseravelmente, seu tolo!' Inclua trechos de diálogo ou links para contexto de lore.",
+        help="Qualquer texto que ajude a moldar o **ESTILO** de resposta do bot. Isso é usado para Few-Shot Learning. O conteúdo não será repetido.",
+        height=200
+    )
+    
+    # 5. Configurações da IA
+    st.subheader("⚙️ Configurações da IA")
+    col3, col4 = st.columns([1, 1])
+    
+    with col3:
+        bot_temperature = st.slider(
+            "Temperatura (Criatividade)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.8,
+            step=0.1,
+            help="Maior valor = mais criatividade e aleatoriedade."
+        )
+    
+    with col4:
+        bot_max_tokens = st.number_input(
+            "Máximo de Tokens de Saída",
+            min_value=128,
+            max_value=4096,
+            value=1024,
+            step=128,
+            help="Controla o tamanho máximo da resposta da IA."
+        )
+    
+    submitted = st.form_submit_button("Criar e Salvar Agente de IA")
+
+if submitted:
+    if not bot_name or not bot_personality:
+        st.error("Por favor, preencha o Nome do Agente e o Núcleo de Personalidade. Eles são obrigatórios.")
+    else:
+        # Cria um ID único (usando nome e timestamp para evitar colisão)
+        bot_id = f"bot-{bot_name.lower().replace(' ', '-').replace('.', '')}-{int(time.time() % 1000)}"
+        
+        payload = {
+            "bot_id": bot_id,
+            "creator_id": "user-1", # Marcamos como criado pelo usuário
+            "name": bot_name,
+            "gender": bot_gender,
+            "introduction": bot_intro,
+            "personality": bot_personality,
+            "welcome_message": bot_welcome,
+            "conversation_context": bot_context,
+            "system_prompt": "", # O backend constrói o prompt final
+            "ai_config": {
+                "temperature": bot_temperature,
+                "max_output_tokens": bot_max_tokens
+            }
+        }
+        
+        create_bot(payload)

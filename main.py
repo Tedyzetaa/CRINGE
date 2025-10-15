@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel # <-- CAMPO ADICIONADO AQUI
-from models import User, Bot, ChatGroup, NewMessage, Message
+from pydantic import BaseModel # <-- IMPORT CORRIGIDO
+from models import User, Bot, ChatGroup, NewMessage, Message, MemberUpdate # Importado MemberUpdate do models
+# Importa as novas funções do db.py (SQLite)
 from db import get_user, get_bot, get_group, save_message, save_bot, get_all_bots, update_group_members 
 import time
 import os
@@ -17,17 +18,22 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY não encontrada no arquivo .env. Certifique-se de que ele está na pasta raiz e contém a chave.")
+    # Levanta o erro para o Render em vez de usar raise ValueError (mais robusto)
+    print("ERRO CRÍTICO: GEMINI_API_KEY não encontrada. O backend NÃO funcionará.")
+    # Não levantamos o erro diretamente aqui para que o Uvicorn possa iniciar, 
+    # mas o cliente Gemini falhará se a chave for usada.
+    client = None
+else:
+    # Inicializa o cliente Gemini
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Inicializa o cliente Gemini
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ----------------------------------------------------------------------
 # 1. Configuração Inicial e Aplicação
 # ----------------------------------------------------------------------
 app = FastAPI(
-    title="CRINGE RPG-AI Multi-Bot Backend - V2.0",
-    description="API para gerenciar usuários, bots e grupos de chat com persistência SQLite."
+    title="CRINGE RPG-AI Multi-Bot Backend - V2.1",
+    description="API para gerenciar usuários, bots e grupos de chat com persistência SQLite e personalização avançada."
 )
 
 # ----------------------------------------------------------------------
@@ -36,23 +42,15 @@ app = FastAPI(
 
 @app.get("/")
 def read_root():
-    return {"status": "OK", "version": "2.0", "message": "Backend do CRINGE RPG-AI está ativo com SQLite!"}
+    return {"status": "OK", "version": "2.1 (SQLite/Advanced Bots)", "message": "Backend do CRINGE RPG-AI está ativo!"}
 
-@app.get("/groups/{group_id}")
-def get_chat_group(group_id: str) -> ChatGroup:
+@app.get("/groups/{group_id}", response_model=ChatGroup)
+def get_chat_group(group_id: str):
     """Retorna detalhes completos de um grupo de chat, incluindo histórico."""
     group = get_group(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
     return group
-
-@app.get("/users/{user_id}", response_model=User)
-def get_user_details(user_id: str):
-    """Retorna detalhes de um usuário."""
-    user = get_user(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
-    return user
 
 # ROTA PARA CRIAÇÃO E LISTAGEM DE BOTS (USANDO SQLite)
 @app.post("/bots/create", response_model=Bot)
@@ -69,10 +67,7 @@ def get_all_available_bots():
     """Retorna a lista de todos os bots criados (do SQLite)."""
     return get_all_bots()
 
-# NOVA ROTA: Adicionar/Remover Membros do Grupo
-class MemberUpdate(BaseModel):
-    member_ids: list[str]
-
+# ROTA: Adicionar/Remover Membros do Grupo
 @app.post("/groups/{group_id}/members")
 def update_group_members_route(group_id: str, member_update: MemberUpdate):
     """Atualiza a lista de membros de um grupo."""
@@ -80,14 +75,13 @@ def update_group_members_route(group_id: str, member_update: MemberUpdate):
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
 
-    # Remove o ID do usuário de teste (user-1) se estiver na lista de bots, para evitar erros
-    final_members = [mid for mid in member_update.member_ids if mid != "user-1"]
+    # 1. Filtra a lista para IDs válidos e remove IDs repetidos
+    final_members = list(set(member_update.member_ids))
     
-    # Garante que o usuário de teste (user-1) esteja sempre presente
+    # 2. Garante que o usuário de teste (user-1) e o Mestre estejam sempre lá
     if "user-1" not in final_members:
         final_members.append("user-1")
 
-    # Garante que o Mestre da Masmorra (bot-mestre) esteja sempre presente
     if "bot-mestre" not in final_members:
         final_members.append("bot-mestre")
         
@@ -97,28 +91,51 @@ def update_group_members_route(group_id: str, member_update: MemberUpdate):
 
 
 # ----------------------------------------------------------------------
-# 3. Lógica do Gemini para um Único Bot - CORREÇÃO DE VERSÃO/ASSÍNCRONA
+# 3. Lógica do Gemini para um Único Bot - NOVA CONSTRUÇÃO DE PROMPT
 # ----------------------------------------------------------------------
-# (Esta função permanece inalterada, usando a correção do Executor)
 
 async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -> Message:
     """Chama a API do Gemini para obter a resposta de um bot específico."""
     
+    if not client:
+         return Message(
+            sender_id=bot.bot_id,
+            sender_type="bot",
+            text=f"Erro de IA: Cliente Gemini não inicializado (Chave de API ausente ou inválida).",
+            timestamp=time.time()
+        )
+        
     contents = []
     
+    # Mapeia mensagens recentes para o formato Content
     for msg in group.messages[-10:]:
         role = "user" if msg.sender_type == "user" else "model"
+        # Trata bots que não são o alvo como 'user' no contexto para o alvo
         if msg.sender_type == "bot" and msg.sender_id != bot.bot_id:
              role = "user" 
 
         contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg.text)]))
 
-    system_instruction = bot.system_prompt + (
-        f"\n---\n"
-        f"CONTEXTO DO CENÁRIO: {group.scenario}\n"
-        f"Sua próxima resposta deve reagir à última mensagem do usuário ('{user_message_text}') e manter sua personalidade. "
-        f"Se for o Mestre, descreva a cena. Se for um NPC, reaja como personagem."
+    # --- NOVA CONSTRUÇÃO DO SYSTEM INSTRUCTION (V2.1) ---
+    
+    system_instruction = (
+        f"**INSTRUÇÕES DO AGENTE: {bot.name} ({bot.gender})**\n\n"
+        f"**1. PERSONALIDADE E REGRAS (NÚCLEO):**\n"
+        f"Siga estas instruções rigorosamente:\n{bot.personality}\n\n"
+        
+        f"**2. CONTEXTO DE CONVERSA/ESTILO (FEW-SHOT):**\n"
+        f"O texto a seguir deve guiar o ESTILO, TOM e LORE da sua resposta. Use-o como exemplo, mas NÃO o repita literalmente na resposta:\n"
+        f"'{bot.conversation_context}'\n\n"
+        
+        f"**3. AMBIENTE ATUAL:**\n"
+        f"O cenário do grupo é: '{group.scenario}'\n"
+        f"Sua breve descrição/introdução é: '{bot.introduction}'\n"
+        f"MEMBROS ATIVOS: {', '.join([get_bot(mid).name if mid.startswith('bot-') else 'Usuário' for mid in group.member_ids])}\n\n"
+        
+        f"**TAREFA:** Sua única resposta deve reagir à última mensagem do usuário ('{user_message_text}'). Mantenha a concisão e o foco no seu papel."
     )
+    
+    # --------------------------------------------------------
     
     ai_config_dict: Dict[str, Any] = bot.ai_config
     
@@ -129,7 +146,7 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
     )
     
     try:
-        # CORREÇÃO: Usar a chamada síncrona DENTRO de um executor para evitar erros de versão do SDK
+        # Usa a chamada síncrona DENTRO de um executor
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
@@ -157,7 +174,7 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
         )
 
 # ----------------------------------------------------------------------
-# 4. Rota Principal: Envio de Mensagens e Resposta da IA (USANDO PARALELISMO)
+# 4. Rota Principal: Envio de Mensagens
 # ----------------------------------------------------------------------
 
 @app.post("/groups/send_message")
