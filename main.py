@@ -31,17 +31,17 @@ else:
 # 1. Configuração Inicial e Aplicação
 # ----------------------------------------------------------------------
 app = FastAPI(
-    title="CRINGE RPG-AI Multi-Bot Backend - V2.2",
+    title="CRINGE RPG-AI Multi-Bot Backend - V2.3",
     description="API para gerenciar com persistência SQLite e contexto multimodal."
 )
 
 # ----------------------------------------------------------------------
-# 2. Rotas (Permanecem as mesmas da V2.1)
+# 2. Rotas
 # ----------------------------------------------------------------------
 
 @app.get("/")
 def read_root():
-    return {"status": "OK", "version": "2.2 (SQLite/Multimodal)", "message": "Backend do CRINGE RPG-AI está ativo!"}
+    return {"status": "OK", "version": "2.3 (SQLite/Multimodal/Mestre Opcional)", "message": "Backend do CRINGE RPG-AI está ativo!"}
 
 @app.get("/groups/{group_id}", response_model=ChatGroup)
 def get_chat_group(group_id: str):
@@ -68,13 +68,14 @@ def update_group_members_route(group_id: str, member_update: MemberUpdate):
     if not group:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
 
+    # Remove duplicados e garante que a lista de membros é válida
     final_members = list(set(member_update.member_ids))
     
+    # O usuário de teste (jogador) deve ser sempre obrigatório
     if "user-1" not in final_members:
         final_members.append("user-1")
 
-    if "bot-mestre" not in final_members:
-        final_members.append("bot-mestre")
+    # REGRA ALTERADA: bot-mestre AGORA é opcional e não é mais forçado a ser incluído.
         
     update_group_members(group_id, final_members)
     
@@ -82,7 +83,7 @@ def update_group_members_route(group_id: str, member_update: MemberUpdate):
 
 
 # ----------------------------------------------------------------------
-# 3. Lógica do Gemini - NOVO TRATAMENTO MULTIMODAL
+# 3. Lógica do Gemini - Corrigido Erro Assíncrono (V2.3)
 # ----------------------------------------------------------------------
 
 async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -> Message:
@@ -101,11 +102,15 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
     for msg in group.messages[-10:]:
         role = "user" if msg.sender_type == "user" else "model"
         if msg.sender_type == "bot" and msg.sender_id != bot.bot_id:
+             # Trata respostas de outros bots como parte do contexto do usuário
              role = "user" 
 
         contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg.text)]))
 
     # --- 3.2. CONSTRUÇÃO DO SYSTEM INSTRUCTION (TEXTUAL) ---
+    
+    # Gera a lista de nomes dos membros ativos para o contexto
+    member_names = [get_bot(mid).name if mid.startswith('bot-') else 'Usuário' for mid in group.member_ids]
     
     system_instruction = (
         f"**INSTRUÇÕES DO AGENTE: {bot.name} ({bot.gender})**\n\n"
@@ -119,7 +124,7 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
         f"**3. AMBIENTE ATUAL:**\n"
         f"O cenário do grupo é: '{group.scenario}'\n"
         f"Sua breve descrição/introdução é: '{bot.introduction}'\n"
-        f"MEMBROS ATIVOS: {', '.join([get_bot(mid).name if mid.startswith('bot-') else 'Usuário' for mid in group.member_ids])}\n\n"
+        f"MEMBROS ATIVOS: {', '.join(member_names)}\n\n"
         
         f"**TAREFA:** Sua única resposta deve reagir à última mensagem do usuário ('{user_message_text}'). Mantenha a concisão e o foco no seu papel."
     )
@@ -134,14 +139,9 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
     # 2. Adiciona as imagens (decodificadas de Base64)
     for data_uri in bot.context_images:
         try:
-            # Extrai o tipo e o dado Base64 (ex: "data:image/png;base64,iVBORw...")
             metadata, encoded_data = data_uri.split(',', 1)
             mime_type = metadata.split(';')[0].split(':')[1]
-            
-            # Decodifica Base64 para bytes
             image_bytes = base64.b64decode(encoded_data)
-            
-            # Cria a parte do Gemini a partir dos bytes da imagem
             multimodal_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
             
         except Exception as e:
@@ -160,14 +160,11 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
     )
     
     try:
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=contents,
-                config=ai_config
-            )
+        # CORREÇÃO: Chamada síncrona direta do client (resolve o erro 'generate_content_async')
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=contents,
+            config=ai_config
         )
         
         return Message(
@@ -187,7 +184,7 @@ async def get_bot_response(bot: Bot, group: ChatGroup, user_message_text: str) -
         )
 
 # ----------------------------------------------------------------------
-# 4. Rota Principal: Envio de Mensagens (Permanecem a mesma)
+# 4. Rota Principal: Envio de Mensagens
 # ----------------------------------------------------------------------
 
 @app.post("/groups/send_message")
@@ -212,6 +209,7 @@ async def send_group_message(new_msg: NewMessage):
     
     for member_id in group.member_ids:
         bot = get_bot(member_id)
+        # Verifica se é um bot e se não é o próprio remetente da mensagem
         if bot and member_id != new_msg.sender_id: 
             task = get_bot_response(bot, group, new_msg.text)
             bot_tasks.append(task)

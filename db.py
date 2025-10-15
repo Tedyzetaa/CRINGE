@@ -1,13 +1,12 @@
 import sqlite3
 import json
 import time
-# Importe corretamente os modelos de dados
 from models import User, Bot, Message, ChatGroup
 
 # --- Configuração do Banco de Dados ---
 DB_NAME = 'cringe_rpg.db'
 
-# --- Configuração dos Modelos de Teste (V2.2 - COMPLETO) ---
+# --- Configuração dos Modelos de Teste (V2.3) ---
 
 TEST_USER = User(
     user_id="user-1",
@@ -29,7 +28,7 @@ TEST_BOT_MASTER = Bot(
     ),
     welcome_message="Que os dados decidam seu destino! Onde você vai primeiro?",
     conversation_context="O Mestre narra em blocos curtos e com tom neutro, focando em descrições ambientais.",
-    context_images=[], # Adicionado campo V2.2
+    context_images=[],
     
     system_prompt="", 
     ai_config={"temperature": 0.8, "max_output_tokens": 1024}
@@ -49,7 +48,7 @@ TEST_BOT_BARD = Bot(
     ),
     welcome_message="Ouço um chamado por canções! Digam o que desejam, em versos, por favor.",
     conversation_context="Suas respostas sempre incluem uma rima ou trocadilho, e terminam com a assinatura: *canta uma canção sobre isso*",
-    context_images=[], # Adicionado campo V2.2
+    context_images=[],
     
     system_prompt="", 
     ai_config={"temperature": 0.9, "max_output_tokens": 512}
@@ -100,7 +99,7 @@ def save_bot(bot: Bot):
         bot.personality,
         bot.welcome_message,
         bot.conversation_context,
-        json.dumps(bot.context_images) # SALVANDO COMO JSON
+        json.dumps(bot.context_images) 
     ))
     conn.commit()
     conn.close()
@@ -119,14 +118,12 @@ def get_bot(bot_id: str) -> Bot | None:
             system_prompt=bot_row['system_prompt'],
             ai_config=json.loads(bot_row['ai_config']),
             
-            # Campos V2.1
             gender=bot_row['gender'],
             introduction=bot_row['introduction'],
             personality=bot_row['personality'],
             welcome_message=bot_row['welcome_message'],
             conversation_context=bot_row['conversation_context'],
             
-            # NOVO CAMPO V2.2
             context_images=json.loads(bot_row['context_images'] or '[]')
         )
     return None
@@ -146,20 +143,18 @@ def get_all_bots() -> list[Bot]:
             system_prompt=row['system_prompt'],
             ai_config=json.loads(row['ai_config']),
             
-            # Campos V2.1
             gender=row['gender'],
             introduction=row['introduction'],
             personality=row['personality'],
             welcome_message=row['welcome_message'],
             conversation_context=row['conversation_context'],
             
-            # NOVO CAMPO V2.2
             context_images=json.loads(row['context_images'] or '[]')
         ))
     return bots
 
 # --- USERS ---
-# ... (save_user, get_user, save_group, get_group, add_message_to_group, update_group_members permanecem iguais) ...
+
 def save_user(user: User):
     """Insere ou atualiza um usuário no banco de dados."""
     conn = get_db_connection()
@@ -199,7 +194,7 @@ def save_group(group: ChatGroup):
         group.name, 
         group.scenario, 
         json.dumps(group.member_ids),
-        json.dumps([msg.model_dump() for msg in group.messages]) # Pydantic v2 dump
+        json.dumps([msg.model_dump() for msg in group.messages])
     ))
     conn.commit()
     conn.close()
@@ -255,12 +250,11 @@ def update_group_members(group_id: str, member_ids: list[str]):
     conn.commit()
     conn.close()
 
-# Alias para a função de salvar mensagem, usada pelo main.py
 save_message = add_message_to_group
 
 
 # ----------------------------------------
-# --- Funções de Inicialização (Chamadas por último) ---
+# --- Funções de Inicialização ---
 # ----------------------------------------
 
 def init_db():
@@ -284,16 +278,14 @@ def init_db():
             context_images TEXT NOT NULL
         )
     ''')
-    conn.commit() # Commit inicial da criação da tabela
+    conn.commit()
 
     # MIGRAÇÃO: Adiciona o novo campo context_images se ele não existir
     try:
-        # Tenta adicionar a coluna se ela ainda não estiver lá
         c.execute("ALTER TABLE bots ADD COLUMN context_images TEXT DEFAULT '[]'")
         conn.commit()
         print("MIGRAÇÃO: Coluna 'context_images' adicionada à tabela 'bots'.")
     except sqlite3.OperationalError as e:
-        # Se a coluna já existe, ou se for a primeira vez que cria, o erro é ignorado.
         if "duplicate column name" not in str(e):
              print(f"Erro na migração (tolerado): {e}")
 
@@ -330,5 +322,4 @@ def init_db():
         
     conn.close()
 
-# Garante que o DB seja inicializado ao carregar o módulo
 init_db()
