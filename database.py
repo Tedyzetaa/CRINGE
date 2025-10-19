@@ -1,50 +1,48 @@
-# database.py
+# c:\cringe\3.0\database.py (ATUALIZADO PARA POSTGRES/RENDER)
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+import os
 
-# -----------------------------------------------------------
-# 1. Configuração do Banco de Dados
-# -----------------------------------------------------------
-DATABASE_URL = "sqlite:///./cringe.db"
+# Tenta obter a URL do banco de dados do ambiente (Render)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# O 'check_same_thread' é necessário apenas para SQLite, 
-# mas é mantido para compatibilidade com o FastAPI/SQLite.
-engine = create_engine(
-    DATABASE_URL, connect_args={"check_same_thread": False}
-)
+if DATABASE_URL:
+    # Render usa PostgreSQL, mas o driver psycopg2 usa 'postgresql'
+    # Esta substituição é comum em deploys
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+    # Cria o motor para PostgreSQL
+    engine = create_engine(
+        DATABASE_URL,
+        # O pool_pre_ping é bom para manter a conexão viva em ambientes de nuvem
+        pool_pre_ping=True
+    )
+    print("INFO: Usando PostgreSQL com DATABASE_URL.")
+else:
+    # Fallback para SQLite local (para desenvolvimento)
+    SQLALCHEMY_DATABASE_URL = "sqlite:///./cringe.db"
+    
+    # Cria o motor para SQLite
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        connect_args={"check_same_thread": False}, # Necessário para SQLite em FastAPI
+    )
+    print("INFO: Usando SQLite localmente.")
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-# -----------------------------------------------------------
-# 2. Criação das Tabelas
-# -----------------------------------------------------------
-
-# Importa o módulo models para que Base conheça todas as classes
-# Nota: Você deve garantir que 'models.py' existe na raiz e tem suas classes ORM.
-import models 
-
-# Cria as tabelas no banco de dados se elas ainda não existirem
-# Isso deve ser chamado antes de iniciar a aplicação (ex: em main.py ou em um script de inicialização)
-Base.metadata.create_all(bind=engine)
-
-
-# -----------------------------------------------------------
-# 3. Função de Dependência (get_db)
-# -----------------------------------------------------------
-
+# Função para dependência do FastAPI
 def get_db():
-    """
-    Função auxiliar para obter uma sessão de banco de dados.
-    Usada como dependência nos routers do FastAPI.
-    """
     db = SessionLocal()
     try:
-        # Retorna a sessão, permitindo que o FastAPI a injete e a use
         yield db
     finally:
-        # Garante que a sessão é fechada após a requisição, mesmo em caso de erro
         db.close()
+
+# Importe os modelos em seu main.py e chame Base.metadata.create_all(bind=engine)
+# para garantir que as tabelas sejam criadas.

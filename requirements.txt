@@ -5,3 +5,5 @@ python-dotenv
 google-genai
 streamlit
 requests
+sqlalchemy
+psycopg2-binary  # Se for usar PostgreSQL
