@@ -2,8 +2,7 @@ import streamlit as st
 import requests
 import time
 
-# 🚨 API_URL deve apontar para o servidor FastAPI, geralmente na porta 8000
-API_URL = "http://127.0.0.1:8000"
+API_URL = "https://cringe-8h21.onrender.com"
 
 st.set_page_config(page_title="CRINGE RPG-AI", page_icon="🧙", layout="wide")
 
