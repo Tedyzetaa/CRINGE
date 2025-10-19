@@ -1,326 +1,191 @@
-import sqlite3
-import json
+import streamlit as st
+import requests
 import time
-from models import User, Bot, Message, ChatGroup
 
-# --- Configuração do Banco de Dados ---
-DB_NAME = 'cringe_rpg.db'
+# 🚨 API_URL deve apontar para o servidor FastAPI, geralmente na porta 8000
+API_URL = "http://127.0.0.1:8000"
 
-# --- Configuração dos Modelos de Teste (V2.3) ---
+st.set_page_config(page_title="CRINGE RPG-AI", page_icon="🧙", layout="wide")
 
-TEST_USER = User(
-    user_id="user-1",
-    username="Herói Teste",
-    is_admin=True
-)
+# 🔹 Estilo personalizado
+st.markdown("""
+    <style>
+    .main { background-color: #1e1e2f; color: #f0f0f0; }
+    .block-container { padding-top: 2rem; }
+    .stTextInput > div > input { background-color: #2e2e3e; color: white; }
+    .stButton > button { background-color: #6c63ff; color: white; border-radius: 5px; }
+    .stSelectbox > div { background-color: #2e2e3e; color: white; }
+    </style>
+""", unsafe_allow_html=True)
 
-TEST_BOT_MASTER = Bot(
-    bot_id="bot-mestre",
-    creator_id="system",
-    name="Mestre da Masmorra",
-    
-    gender='Indefinido',
-    introduction="O Narrador implacável do seu destino.",
-    personality=(
-        "Você é o Mestre da Masmorra de um jogo de RPG de mesa. Sua função é narrar o cenário, "
-        "descrever as ações dos NPCs e reagir às ações dos jogadores. Seja vívido e crie tensão. "
-        "Foque em descrever o ambiente e os desafios imediatos. Nunca use aspas."
-    ),
-    welcome_message="Que os dados decidam seu destino! Onde você vai primeiro?",
-    conversation_context="O Mestre narra em blocos curtos e com tom neutro, focando em descrições ambientais.",
-    context_images=[],
-    
-    system_prompt="", 
-    ai_config={"temperature": 0.8, "max_output_tokens": 1024}
-)
+st.title("🧙 CRINGE RPG-AI")
+st.subheader("Converse com seus bots em cenários épicos")
 
-TEST_BOT_BARD = Bot(
-    bot_id="bot-npc-1",
-    creator_id="system",
-    name="Bardo Errante",
-    
-    gender='Masculino',
-    introduction="Um bardo com um alaúde que adora rimas ruins e piadas inoportunas.",
-    personality=(
-        "Você é um Bardo Errante com uma paixão por rimas ruins e canções inoportunas. "
-        "Sua função é sempre responder com uma rima, um verso, ou uma canção, não importa o quão sério seja o contexto. "
-        "Sua personalidade é levemente cômica e dramática."
-    ),
-    welcome_message="Ouço um chamado por canções! Digam o que desejam, em versos, por favor.",
-    conversation_context="Suas respostas sempre incluem uma rima ou trocadilho, e terminam com a assinatura: *canta uma canção sobre isso*",
-    context_images=[],
-    
-    system_prompt="", 
-    ai_config={"temperature": 0.9, "max_output_tokens": 512}
-)
+# --- FUNÇÕES DE CHAMADA À API ---
 
-TEST_GROUP = ChatGroup(
-    group_id="group-123",
-    name="Taverna do Dragão Dorminhoco",
-    scenario="Os heróis acabam de chegar em uma taverna mal iluminada, cheia de clientes barulhentos.",
-    # ALTERADO: bot-mestre removido do seeding para opcionalidade
-    member_ids=["user-1", "bot-npc-1"],
-    messages=[]
-)
-
-
-# --- Funções de Conexão ---
-
-def get_db_connection():
-    """Cria e retorna uma conexão com o banco de dados."""
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-# ----------------------------------------
-# --- Funções CRUD ---
-# ----------------------------------------
-
-# --- BOTS ---
-
-def save_bot(bot: Bot):
-    """Insere ou atualiza um bot no banco de dados, incluindo novos campos V2.2."""
-    conn = get_db_connection()
-    conn.execute('''
-        INSERT OR REPLACE INTO bots (
-            id, creator_id, name, system_prompt, ai_config, 
-            gender, introduction, personality, welcome_message, conversation_context,
-            context_images  
-        ) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        bot.bot_id, 
-        bot.creator_id, 
-        bot.name, 
-        bot.system_prompt, 
-        json.dumps(bot.ai_config),
-        bot.gender,
-        bot.introduction,
-        bot.personality,
-        bot.welcome_message,
-        bot.conversation_context,
-        json.dumps(bot.context_images) 
-    ))
-    conn.commit()
-    conn.close()
-
-def get_bot(bot_id: str) -> Bot | None:
-    """Busca um bot pelo ID e reconstrói o objeto Bot, incluindo novos campos."""
-    conn = get_db_connection()
-    bot_row = conn.execute("SELECT * FROM bots WHERE id = ?", (bot_id,)).fetchone()
-    conn.close()
-    
-    if bot_row:
-        return Bot(
-            bot_id=bot_row['id'],
-            creator_id=bot_row['creator_id'],
-            name=bot_row['name'],
-            system_prompt=bot_row['system_prompt'],
-            ai_config=json.loads(bot_row['ai_config']),
-            
-            gender=bot_row['gender'],
-            introduction=bot_row['introduction'],
-            personality=bot_row['personality'],
-            welcome_message=bot_row['welcome_message'],
-            conversation_context=bot_row['conversation_context'],
-            
-            context_images=json.loads(bot_row['context_images'] or '[]')
-        )
-    return None
-
-def get_all_bots() -> list[Bot]:
-    """Retorna todos os bots salvos, reconstruindo o objeto Bot completo."""
-    conn = get_db_connection()
-    bot_rows = conn.execute("SELECT * FROM bots").fetchall()
-    conn.close()
-    
-    bots = []
-    for row in bot_rows:
-        bots.append(Bot(
-            bot_id=row['id'],
-            creator_id=row['creator_id'],
-            name=row['name'],
-            system_prompt=row['system_prompt'],
-            ai_config=json.loads(row['ai_config']),
-            
-            gender=row['gender'],
-            introduction=row['introduction'],
-            personality=row['personality'],
-            welcome_message=row['welcome_message'],
-            conversation_context=row['conversation_context'],
-            
-            context_images=json.loads(row['context_images'] or '[]')
-        ))
-    return bots
-
-# --- USERS ---
-
-def save_user(user: User):
-    """Insere ou atualiza um usuário no banco de dados."""
-    conn = get_db_connection()
-    conn.execute('''
-        INSERT OR REPLACE INTO users (id, username, is_admin) 
-        VALUES (?, ?, ?)
-    ''', (
-        user.user_id, 
-        user.username, 
-        user.is_admin
-    ))
-    conn.commit()
-    conn.close()
-
-def get_user(user_id: str) -> User | None:
-    """Busca um usuário pelo ID."""
-    conn = get_db_connection()
-    user_row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-    conn.close()
-    
-    if user_row:
-        return User(
-            user_id=user_row['id'],
-            username=user_row['username'],
-            is_admin=bool(user_row['is_admin'])
-        )
-    return None
-
-def save_group(group: ChatGroup):
-    """Salva todo o objeto ChatGroup (usado para inicialização e atualizações completas)."""
-    conn = get_db_connection()
-    conn.execute('''
-        INSERT OR REPLACE INTO groups (id, name, scenario, member_ids, messages) 
-        VALUES (?, ?, ?, ?, ?)
-    ''', (
-        group.group_id, 
-        group.name, 
-        group.scenario, 
-        json.dumps(group.member_ids),
-        json.dumps([msg.model_dump() for msg in group.messages])
-    ))
-    conn.commit()
-    conn.close()
-
-def get_group(group_id: str) -> ChatGroup | None:
-    """Busca um grupo e reconstrói o objeto ChatGroup a partir do DB."""
-    conn = get_db_connection()
-    group_row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
-    conn.close()
-    
-    if group_row:
-        messages_data = json.loads(group_row['messages'])
-        messages = [Message(**msg) for msg in messages_data]
-        member_ids = json.loads(group_row['member_ids'])
-
-        return ChatGroup(
-            group_id=group_row['id'],
-            name=group_row['name'],
-            scenario=group_row['scenario'],
-            member_ids=member_ids,
-            messages=messages
-        )
-    return None
-
-def update_group_members(group_id: str, member_ids: list[str]):
-    """Atualiza a lista de membros do grupo."""
-    conn = get_db_connection()
-    conn.execute('''
-        UPDATE groups SET member_ids = ? WHERE id = ?
-    ''', (
-        json.dumps(member_ids),
-        group_id
-    ))
-    conn.commit()
-    conn.close()
-
-def add_message_to_group(group_id: str, message: Message):
-    """Adiciona uma nova mensagem ao histórico do grupo."""
-    group = get_group(group_id)
-    if not group:
-        return
-        
-    group.messages.append(message)
-    
-    # Serializa e salva o objeto de grupo atualizado
-    conn = get_db_connection()
-    conn.execute('''
-        UPDATE groups SET messages = ? WHERE id = ?
-    ''', (
-        json.dumps([msg.model_dump() for msg in group.messages]),
-        group_id
-    ))
-    conn.commit()
-    conn.close()
-
-save_message = add_message_to_group
-
-
-# ----------------------------------------
-# --- Funções de Inicialização ---
-# ----------------------------------------
-
-def init_db():
-    """Inicializa o banco de dados e as tabelas, se não existirem."""
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # 1. Tabela Bots (V2.2)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS bots (
-            id TEXT PRIMARY KEY,
-            creator_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            system_prompt TEXT NOT NULL,
-            ai_config TEXT NOT NULL,
-            gender TEXT NOT NULL,
-            introduction TEXT NOT NULL,
-            personality TEXT NOT NULL,
-            welcome_message TEXT NOT NULL,
-            conversation_context TEXT NOT NULL,
-            context_images TEXT NOT NULL
-        )
-    ''')
-    conn.commit()
-
-    # MIGRAÇÃO: Adiciona o novo campo context_images se ele não existir
+def api_post(endpoint, payload):
+    """Função auxiliar para POST requests com tratamento de erro básico."""
     try:
-        c.execute("ALTER TABLE bots ADD COLUMN context_images TEXT DEFAULT '[]'")
-        conn.commit()
-        print("MIGRAÇÃO: Coluna 'context_images' adicionada à tabela 'bots'.")
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" not in str(e):
-             print(f"Erro na migração (tolerado): {e}")
+        res = requests.post(f"{API_URL}/{endpoint}", json=payload)
+        res.raise_for_status() # Lança HTTPError para status 4xx/5xx
+        return res.json()
+    except requests.exceptions.ConnectionError:
+        st.sidebar.error("❌ Erro: API do FastAPI não está rodando. Inicie o uvicorn.")
+        return None
+    except requests.exceptions.HTTPError as e:
+        st.sidebar.error(f"❌ Erro HTTP ao enviar para /{endpoint}: {e}")
+        return None
 
-    # 2. Tabela Grupos
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS groups (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            scenario TEXT NOT NULL,
-            member_ids TEXT NOT NULL,
-            messages TEXT NOT NULL
-        )
-    ''')
+def api_get(endpoint):
+    """Função auxiliar para GET requests com tratamento de erro básico."""
+    try:
+        res = requests.get(f"{API_URL}/{endpoint}")
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Erro de Conexão: O backend (FastAPI) deve estar rodando em http://127.0.0.1:8000.")
+        return []
+    except requests.exceptions.HTTPError:
+        return []
 
-    # 3. Tabela Usuários
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            is_admin INTEGER NOT NULL
-        )
-    ''')
+# --- SIDEBAR: JOGADOR ---
+st.sidebar.header("🎭 Jogador")
+username = st.sidebar.text_input("Nome do jogador", value="Aventureiro")
+user_id = f"user-{username.lower().replace(' ', '-')}"
+is_admin = st.sidebar.checkbox("Sou administrador")
+
+# Cria/Atualiza usuário (Agora usa a lógica "Find or Create" no backend)
+if username:
+    api_post("users", {
+        "name": username
+    })
+
+# --- SIDEBAR: CRIAÇÃO DE BOT ---
+st.sidebar.header("🤖 Criar Bot")
+with st.sidebar.expander("Novo Bot"):
+    bot_name = st.text_input("Nome do Bot")
+    bot_personality = st.text_area("Personalidade")
+    bot_intro = st.text_area("Introdução")
+    if st.button("Criar Bot"):
+        bot_payload = {
+            "creator_id": user_id,
+            "name": bot_name,
+            "gender": "Indefinido",
+            "introduction": bot_intro,
+            "personality": bot_personality,
+            "welcome_message": "Saudações, aventureiro!",
+            "conversation_context": "",
+            "context_images": [],
+            "system_prompt": f"Você é {bot_name}, um bot com personalidade: {bot_personality}",
+            "ai_config": {"temperature": 0.7, "max_output_tokens": 512}
+        }
+        if api_post("bots", bot_payload):
+            st.sidebar.success(f"Bot '{bot_name}' criado com sucesso!")
+            # CORRIGIDO
+            st.rerun() 
+
+# --- SIDEBAR: CRIAÇÃO DE GRUPO ---
+st.sidebar.header("🌍 Criar Grupo")
+with st.sidebar.expander("Novo Grupo"):
+    group_name = st.text_input("Nome do Grupo")
+    group_scenario = st.text_area("Cenário")
     
-    conn.commit()
+    # 💡 BUSCA DE BOTS PARA O MULTISELECT
+    all_bots = api_get("bots")
+    bot_options = {b.get("name"): b.get("id") for b in all_bots if b.get("name")} 
     
-    # 4. Inserir dados iniciais (SEEDING)
-    if c.execute("SELECT COUNT(*) FROM bots").fetchone()[0] == 0:
-        print("SEEDING: Inserindo dados iniciais no DB.")
-        save_bot(TEST_BOT_MASTER) 
-        save_bot(TEST_BOT_BARD)
-        save_user(TEST_USER)
-        save_group(TEST_GROUP)
-        print("SEEDING: Dados iniciais inseridos com sucesso.")
-        
-    conn.close()
+    selected_bot_names = st.multiselect(
+        "Bots no grupo", 
+        list(bot_options.keys()),
+        default=[]
+    )
+    
+    # Mapeia nomes selecionados de volta para IDs
+    selected_bot_ids = [bot_options[name] for name in selected_bot_names if name in bot_options]
+    
+    if st.button("Criar Grupo"):
+        if not selected_bot_ids:
+            st.sidebar.warning("Selecione pelo menos um bot para criar o grupo.")
+        else:
+            group_payload = {
+                "name": group_name,
+                "scenario": group_scenario,
+                "bot_ids": selected_bot_ids 
+            }
+            if api_post("groups", group_payload):
+                st.sidebar.success(f"Grupo '{group_name}' criado com sucesso!")
+                # CORRIGIDO
+                st.rerun() 
 
-init_db()
+# --- SELEÇÃO DE GRUPO ---
+st.subheader("🌍 Escolha o grupo")
+
+all_groups = api_get("groups")
+
+group_name_to_id = {g.get("name"): g.get("id") for g in all_groups if g.get("name")}
+group_names = list(group_name_to_id.keys())
+
+placeholder_text = "Nenhuma opção para selecionar. Crie um grupo na sidebar."
+display_options = group_names if group_names else [placeholder_text]
+
+group_choice = st.selectbox(
+    "Selecione um grupo para continuar a conversa:",
+    options=display_options,
+    index=0 if group_names else None, 
+    placeholder=placeholder_text
+)
+
+group_id = None
+if group_choice and group_choice != placeholder_text:
+    group_id = group_name_to_id.get(group_choice)
+
+# --- CONVERSA ---
+st.markdown("### 💬 Conversa")
+
+if not group_id:
+    st.info("Selecione ou crie um grupo para começar a conversar.")
+else:
+    # Busca o histórico de mensagens (Endpoint corrigido)
+    msg_resp_data = api_get(f"groups/{group_id}/messages")
+    
+    if msg_resp_data and isinstance(msg_resp_data, list):
+        for msg in msg_resp_data:
+            sender_id = msg.get("sender_id", "unknown")
+            text = msg.get('text', 'Mensagem vazia')
+
+            # LÓGICA DE EXIBIÇÃO: Verifica se o ID começa com 'bot-'
+            if sender_id.startswith("bot-"):
+                # Tenta extrair o nome ou ID do bot
+                # Nota: Em um sistema real, você buscaria o nome do bot pelo ID.
+                sender_display = f"🤖 Bot (ID: {sender_id.split('-')[-1]})" 
+                st.markdown(f"**{sender_display}**: {text}")
+            else:
+                # Caso contrário, assume que é o jogador
+                sender_display = "🧑 Jogador" 
+                st.markdown(f"**{sender_display}**: {text}")
+    else:
+           st.warning("Não há histórico de mensagens para este grupo.")
+
+# --- ENVIAR NOVA MENSAGEM ---
+st.markdown("---")
+st.markdown("### ✉️ Enviar mensagem")
+
+# Cria um form/container para garantir que o input e o botão sejam atualizados juntos
+with st.form("message_form", clear_on_submit=True):
+    text = st.text_input("Digite sua mensagem", key="message_input")
+    submitted = st.form_submit_button("Enviar")
+
+    if submitted:
+        if not group_id:
+            st.error("Selecione um grupo antes de enviar a mensagem.")
+        elif text:
+            message_payload = {
+                "group_id": group_id,
+                "sender_id": user_id,
+                "text": text
+            }
+            if api_post("groups/send_message", message_payload):
+                # Pequena pausa para garantir que o banco atualizou e recarrega
+                time.sleep(0.1) 
+                # CORRIGIDO
+                st.rerun()
