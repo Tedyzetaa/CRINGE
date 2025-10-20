@@ -1,6 +1,5 @@
 import uuid
 import time
-import random
 import json
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Body
@@ -8,6 +7,7 @@ from pydantic import BaseModel, Field
 
 # ----------------------------------------------------------------------
 # SIMULAÇÃO DE BANCO DE DADOS (USADA PARA MANTER O ESTADO DOS BOTS)
+# ----------------------------------------------------------------------
 MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
     # 1. BOT PIMENTA (PIP)
     "e6f4a3d9-6c51-4f8e-9d0b-2e7a1c5b8f9d": {
@@ -117,7 +117,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
 }
 # ----------------------------------------------------------------------
 
-# Definições Pydantic
+# Definições Pydantic (Inalteradas)
 class AIConfig(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=1.0)
     max_output_tokens: int = Field(default=512, ge=128, le=4096)
@@ -160,131 +160,43 @@ class ChatMessage(BaseModel):
     
 class BotChatRequest(BaseModel):
     bot_id: str
-    messages: List[ChatMessage] # O payload completo que estava faltando
+    messages: List[ChatMessage] # O histórico completo da conversa
 
 # Router
 router = APIRouter(tags=["bots"])
 
 # ----------------------------------------------------------------------
-# SIMULAÇÃO DE GERAÇÃO DINÂMICA (SUBSTITUINDO A CHAMADA REAL DA API GEMINI)
+# FUNÇÃO PARA PREPARAR O PAYLOAD DO LLM
 # ----------------------------------------------------------------------
 
-def _generate_dynamic_rpg_response(bot_data: Dict[str, Any], messages: List[ChatMessage]) -> str:
+def _prepare_gemini_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -> Dict[str, Any]:
     """
-    Simula o comportamento do LLM (Gemini) usando o contexto completo e o prompt de sistema
-    para gerar uma resposta dinâmica e com cenário.
-    
-    A simulação é baseada no último input e na persona para criar uma resposta que
-    usa a estrutura RPG de forma coerente e contextual.
+    Prepara o payload completo para a chamada do Gemini, incluindo o histórico
+    e as instruções de sistema.
     """
-    
+    # 1. Formatar Histórico de Conversa (Contents)
+    contents = []
+    for msg in messages:
+        # A API Gemini espera 'parts' como uma lista de objetos
+        contents.append({"role": msg.role, "parts": [{"text": msg.text}]})
+
+    # 2. Extrair Instrução de Sistema
     system_prompt = bot_data['system_prompt']
-    bot_name = bot_data['name']
     
-    # 1. Analisar o histórico para extrair o último input do usuário
-    last_user_message = next((msg.text for msg in reversed(messages) if msg.role == 'user'), bot_data['welcome_message'])
-    
-    # 2. Resumo Contextual (Simulação de LLM)
-    context_summary = f"Baseado na nossa conversa anterior e no seu último input: '{last_user_message}', eu devo gerar a próxima parte do cenário."
-    
-    # Gerador de Resposta Simulado
-    
-    if "pimenta" in bot_name.lower():
-        # PIP (Caótica/Emocional) + CARTOLA (Lógico/Sarcástico)
-        
-        # Ação/Cenário (Dinâmico)
-        actions = [
-            f"*O cachecol de Pip se transforma em um relógio de areia, indicando que o tempo da sua última frase está acabando.*",
-            f"*Pip começa a flutuar em círculos, e o Professor Cartola no topo estala uma régua invisível.*",
-            f"*Uma pequena porta aparece na lateral do ursinho de Pip, e o Cartola a abre levemente para espiar.*"
-        ]
-        
-        # Diálogo (Contextual)
-        pip_lines = [
-            f"O que você disse ecoa como um sino de gelo. O eco traz o frio do passado ou o medo do futuro, viajante? ",
-            f"Sua verdade é um espelho quebrado; cada estilhaço conta uma parte da história. Qual fragmento você está disposto a tocar? ",
-            f"Vejo um jardim secreto em sua palavra. Qual foi a última semente de dúvida que você plantou ali? "
-        ]
-        cartola_lines = [
-            f"Deixe o sentimentalismo. O que foi dito exige uma resposta binária: Sim ou Não. Por que a complexidade, Pip?",
-            f"Essa metáfora é imprecisa. O espelho está intacto, mas a perspectiva do usuário é torta. Foco na lógica.",
-            f"Não há jardins. Apenas fatos. Pare de procurar insetos poéticos onde há apenas prosa. "
-        ]
-        
-        action = random.choice(actions)
-        pip_dialogue = random.choice(pip_lines)
-        cartola_dialogue = random.choice(cartola_lines)
-        
-        ai_response_text = f"🌶️ {action} {pip_dialogue} \n\n 🎩 *O Professor Cartola, irritado, se ajeita no topo.* {cartola_dialogue}"
-        
-    elif "zimbrak" in bot_name.lower():
-        # ZIMBRAK (Mecânico/Inventor)
-        
-        # Ação/Cenário (Dinâmico)
-        actions = [
-            f"*Zimbrak estende o braço, e um holograma de engrenagens quebradas aparece sobre a sua cabeça, simulando sua dúvida.*",
-            f"*Um ruído de vapor saindo de suas juntas. Zimbrak está recalibrando seu sistema de escuta para entender o contexto de '{last_user_message}'.*",
-            f"*Zimbrak pega uma chave de fenda invisível e começa a 'apertar' o ar ao redor de sua última frase.*"
-        ]
-        
-        # Diálogo (Contextual)
-        zimbrak_lines = [
-            f"O motor da sua última ideia está superaquecendo. Qual é o óleo que falta para resfriar a ansiedade?",
-            f"Sua observação é o ponto de contato entre dois circuitos. Qual é o propósito desse circuito: gerar luz ou choque?",
-            f"O que foi dito tem a forma de um dispositivo de fuga. Se você ativá-lo, para qual dimensão de silêncio você será levado?",
-            f"A peça que você apresentou se encaixa no quebra-cabeça, mas está enferrujada. Qual é a ferrugem emocional que a impede de girar livremente?"
-        ]
-        
-        action = random.choice(actions)
-        ai_response_text = f"⚙️ {action} {random.choice(zimbrak_lines)}"
-
-    elif "luma" in bot_name.lower():
-        # LUMA (Guardiã/Silenciosa)
-        
-        # Ação/Cenário (Dinâmico)
-        actions = [
-            f"*Luma move o dedo, e a iluminação na sala diminui, restando apenas a luz suave de seu corpo de papel.*",
-            f"*Um pequeno pedaço de papel se desprende de Luma, escrito com apenas um ponto de interrogação.*",
-            f"*Luma aponta para a estante de livros, onde um volume específico (a chave da sua última frase) parece se mover sozinho.*"
-        ]
-        
-        # Diálogo (Contextual)
-        luma_lines = [
-            f"O que foi escrito ('{last_user_message}') está nas entrelinhas. O que o seu silêncio diz sobre o medo de preencher essas lacunas?",
-            f"Sua história é como um livro aberto ao vento. Qual é a página mais importante que você está tentando esconder?",
-            f"Essa palavra tem o cheiro de uma carta nunca lida. Se você pudesse enviar a si mesmo uma mensagem, qual seria o aviso?",
-            f"O que você busca está na biblioteca do seu coração. Mas você tem a coragem de perguntar ao bibliotecário onde encontrá-lo?"
-        ]
-        
-        action = random.choice(actions)
-        ai_response_text = f"📖 {action} {random.choice(luma_lines)}"
-            
-    elif "tiko" in bot_name.lower():
-        # TIKO (Caótico/Absurdo)
-        
-        # Ação/Cenário (Dinâmico)
-        actions = [
-            f"*Tiko tropeça num arco-íris imaginário e cai numa poça de suco de abacaxi.*",
-            f"*Tiko pega um telefone de banana e atende, mas a voz do outro lado é um miado de gato em outro idioma.*",
-            f"*O cenário ao redor de Tiko muda rapidamente para um circo subaquático, onde a gravidade é opcional.*"
-        ]
-        
-        # Diálogo (Contextual)
-        tiko_lines = [
-            f"Isso é muito sério! Seriedade tem gosto de pão amanhecido! O que você faria se sua resposta anterior ('{last_user_message}') se transformasse num castor dançarino?",
-            f"A sua pergunta é uma escada para lugar nenhum. Qual é o primeiro passo para subir para baixo? Lembre-se, o contrário do que parece é quase sempre a resposta!",
-            f"Foco? Foco é para quem tem medo de borboletas gigantes! Se o seu problema fosse um par de meias, você as usaria na cabeça ou tentaria fazer um sanduíche delas?",
-            f"Você disse isso, mas o seu nariz disse 'batata'. Qual dos dois eu devo acreditar? O mundo precisa de mais narizes falantes e menos perguntas lógicas!"
-        ]
-        
-        action = random.choice(actions)
-        ai_response_text = f"🌀 {action} {random.choice(tiko_lines)}"
-        
-    else:
-        ai_response_text = f"*A neblina cobre o chão ao redor de {bot_name}, e ele pisca lentamente.* O cenário está sendo criado. Qual é a sua primeira ação?"
-        
-    return ai_response_text
-
+    # 3. Construir o payload final para generateContent
+    payload = {
+        "contents": contents,
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "generationConfig": {
+            "temperature": bot_data['ai_config']['temperature'],
+            "maxOutputTokens": bot_data['ai_config']['max_output_tokens']
+        },
+        # Incluir modelo aqui, mas será fornecido pelo ambiente Canvas
+        # "model": "gemini-2.5-flash-preview-09-2025" 
+    }
+    return payload
 
 # ----------------------------------------------------------------------
 # ROTAS DE GERENCIAMENTO (Inalteradas)
@@ -316,14 +228,14 @@ async def import_bots(bot_list_file: BotListFile):
     return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
 
 # ----------------------------------------------------------------------
-# ROTA DE CHAT (UTILIZA A GERAÇÃO DINÂMICA)
+# ROTA DE CHAT (ESTRITAMENTE CONTEXTUAL E DE RPG)
 # ----------------------------------------------------------------------
 
 @router.post("/groups/send_message", response_model=Dict[str, str])
 async def send_group_message(request: BotChatRequest):
     """
-    Envia a mensagem completa e o histórico para a função de simulação que gera
-    uma resposta contextualizada com avanço de cenário de RPG.
+    Simula o envio do contexto completo para o LLM. Nenhuma resposta automática ou randomizada.
+    A geração da resposta depende APENAS do LLM seguir o prompt de sistema e o histórico.
     """
     bot_id = request.bot_id
     if bot_id not in MOCK_BOTS_DB:
@@ -331,11 +243,36 @@ async def send_group_message(request: BotChatRequest):
 
     bot_data = MOCK_BOTS_DB[bot_id]
     
-    # Chama a função de simulação que usa o contexto e o prompt de sistema
-    ai_response_text = _generate_dynamic_rpg_response(bot_data, request.messages)
+    # 1. Prepara o payload completo (Histórico + System Prompt)
+    llm_payload = _prepare_gemini_payload(bot_data, request.messages)
+    
+    # 2. Extrai as informações principais para a confirmação
+    last_user_input = request.messages[-1].text if request.messages else "Nenhuma entrada."
+    bot_name = bot_data['name']
+    
+    # ----------------------------------------------------------------------
+    # PONTO DE INTEGRAÇÃO DA API:
+    # ----------------------------------------------------------------------
+    # Em um sistema real, o código AQUI faria uma chamada assíncrona (fetch/requests)
+    # para a API do Gemini, enviando o 'llm_payload'.
+    
+    # O Gemini usaria o 'system_prompt' (com as regras obrigatórias de RPG e cenário)
+    # e todo o 'contents' (histórico completo) para gerar a resposta.
+    
+    # A resposta final seria *dinâmica* e *contextualizada*, garantindo que 
+    # as regras de RPG (*ação* diálogo) sejam seguidas.
+    
+    # Simulação da Resposta de Confirmação (Substituindo a Chamada LLM):
+    ai_response_text = (
+        f"🤖 *Uma densa nuvem de vapor mágico se forma ao redor de {bot_name}, absorvendo o contexto da conversa.* "
+        f"A sua última ação/fala ('{last_user_input}') agora está sendo fundida com a história para EVOLUIR O CENÁRIO. "
+        f"**Instruções de Sistema Ativas:** O bot está sendo forçado a referenciar o contexto, usar o formato RPG (*ação* diálogo) e avançar a narrativa. "
+        f"A próxima resposta, se a API fosse real, seria totalmente baseada nesses elementos, garantindo coerência total."
+    )
+    # ----------------------------------------------------------------------
         
-    # Adicionamos um pequeno delay para simular o tempo de resposta da IA
+    # Pequeno delay para simular o tempo de processamento da IA
     time.sleep(0.5) 
 
-    # Retornar a resposta no formato esperado pelo frontend (o frontend espera 'text')
+    # Retornar a resposta no formato esperado pelo frontend
     return {"text": ai_response_text}
