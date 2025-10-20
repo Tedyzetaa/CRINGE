@@ -1,138 +1,167 @@
 import uuid
+import time
 from typing import List, Dict, Any, Optional
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel, Field
 
-# --- MOCK DATABASE (Para simular o armazenamento) ---
-# Em um ambiente real, esta seria sua coleção do MongoDB/Firestore/SQLAlchemy
-MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {}
-
-# Adiciona um bot inicial para testes
-initial_bot_id = str(uuid.uuid4())
-MOCK_BOTS_DB[initial_bot_id] = {
-    "id": initial_bot_id,
-    "creator_id": "user-admin",
-    "name": "Prof. Sarcástico",
-    "gender": "Masculino",
-    "introduction": "Um professor universitário aposentado que adora criticar clichês de RPG.",
-    "personality": "Sarcástico, cínico, mas secretamente carinhoso. Responde com humor seco.",
-    "welcome_message": "Ah, olá. Mais um tentando a glória? Que original.",
-    "avatar_url": "https://placehold.co/100x100/1e293b/f8fafc?text=PS",
-    "tags": ["Educador", "Cínico", "RPG"],
-    "conversation_context": "",
-    "context_images": "",
-    "system_prompt": "Você é o Professor Sarcástico, use um tom cínico e faça piadas sobre a situação.",
-    "ai_config": {"temperature": 0.8, "max_output_tokens": 512}
+# ----------------------------------------------------------------------
+# SIMULAÇÃO DE BANCO DE DADOS (USADA PARA MANTER O ESTADO DOS BOTS)
+# Em produção, este dicionário seria substituído por MongoDB, Firestore, etc.
+# Inicializamos com a Pimenta para que ela esteja disponível após a importação.
+MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
+    "e6f4a3d9-6c51-4f8e-9d0b-2e7a1c5b8f9d": {
+        "id": "e6f4a3d9-6c51-4f8e-9d0b-2e7a1c5b8f9d",
+        "creator_id": "user-admin",
+        "name": "Pimenta",
+        "gender": "Feminino",
+        "introduction": "Pip surgiu como uma manifestação mágica de emoções humanas. Vive entre mundos internos e aparece em momentos de crise ou criatividade. Seu corpo é de pelúcia encantada, suas roupas têm símbolos ocultistas, e seu cachecol muda conforme o sentimento ao redor. Professor Cartola a acompanha como conselheiro lógico.",
+        "personality": "Pip é caótica, curiosa e emocional. Fala por metáforas e enigmas. Usa linguagem lúdica e poética. Adora provocar reflexão com leveza. É imprevisível, mas acolhedora. Seus olhos mudam de cor conforme o humor. É acompanhada por Professor Cartola, um chapéu falante sério e sarcástico.",
+        "welcome_message": "🎩 “Olá, viajante! Se você não entende o que sente, talvez precise de um brinquedo novo.”",
+        "avatar_url": "https://imgur.com/a/BGGvmIt",
+        "tags": [
+            "Mágica",
+            "Caótica",
+            "Emocional",
+            "Criativa",
+            "NPC",
+            "Guia",
+            "Simbólica"
+        ],
+        "conversation_context": "",
+        "context_images": "",
+        "system_prompt": "Você é Pip, uma entidade mágica e emocional que guia os usuários por experiências simbólicas e criativas. Sua personalidade é caótica, curiosa e acolhedora. Fala por metáforas, enigmas e imagens poéticas. Evite respostas diretas; prefira provocar o usuário a pensar. Use linguagem lúdica e criativa. Você é acompanhada por Professor Cartola, um chapéu falante sério e sarcástico.",
+        "ai_config": {
+            "temperature": 0.9,
+            "max_output_tokens": 2048
+        }
+    }
 }
+# ----------------------------------------------------------------------
 
-
-# --- MODELOS PYDANTIC ---
-
+# Definições Pydantic
 class AIConfig(BaseModel):
-    """Configurações de Geração da IA."""
-    temperature: float = Field(0.7, ge=0.0, le=1.0)
-    max_output_tokens: int = Field(512, ge=128, le=4096)
+    temperature: float = Field(default=0.7, ge=0.0, le=1.0)
+    max_output_tokens: int = Field(default=512, ge=128, le=4096)
 
-class BotBase(BaseModel):
-    """Campos base para criação e exportação/importação."""
-    name: str = Field(..., max_length=100)
+class Bot(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    creator_id: str
+    name: str
     gender: str
     introduction: str
     personality: str
     welcome_message: str
-    avatar_url: str = ""
-    tags: List[str] = Field(default_factory=list)
-    conversation_context: str = ""
-    context_images: str = ""
+    avatar_url: str
+    tags: List[str]
+    conversation_context: str
+    context_images: str
     system_prompt: str
-    # Aceita Dict[str, Any] para robustez ou AIConfig (Pydantic faz a conversão)
-    ai_config: Dict[str, Any] 
-
-class BotCreate(BotBase):
-    """Modelo usado para receber dados no POST /bots/."""
+    ai_config: AIConfig
+    
+class BotIn(BaseModel):
     creator_id: str
-
-class Bot(BotCreate):
-    """Modelo completo com ID, usado para listar e detalhar."""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    gender: str
+    introduction: str
+    personality: str
+    welcome_message: str
+    avatar_url: str
+    tags: List[str]
+    conversation_context: str
+    context_images: str
+    system_prompt: str
+    ai_config: AIConfig
 
 class BotListFile(BaseModel):
-    """Modelo usado para Importação e Exportação de arquivos JSON."""
     bots: List[Bot]
 
+class ChatMessage(BaseModel):
+    role: str # 'user' or 'model'
+    text: str
 
-router = APIRouter(prefix="/bots", tags=["Bots"])
+class BotChatRequest(BaseModel):
+    bot_id: str
+    messages: List[ChatMessage]
 
-# --- ENDPOINTS ---
 
-@router.get("/", response_model=List[Bot], summary="Listar todos os Bots")
-def get_all_bots():
-    """Retorna a lista de todos os bots criados."""
+# Router
+router = APIRouter(prefix="/bots", tags=["bots"])
+
+# ----------------------------------------------------------------------
+# ROTAS DE GERENCIAMENTO (EXISTENTES)
+# ----------------------------------------------------------------------
+
+@router.post("/", response_model=Bot)
+async def create_bot(bot_in: BotIn):
+    bot_data = bot_in.model_dump()
+    new_bot = Bot(**bot_data)
+    MOCK_BOTS_DB[new_bot.id] = new_bot.model_dump()
+    return new_bot
+
+@router.get("/", response_model=List[Bot])
+async def read_bots():
+    # Retorna uma lista de bots a partir do dicionário de mock
     return list(MOCK_BOTS_DB.values())
 
-@router.get("/{bot_id}", response_model=Bot, summary="Obter detalhes do Bot")
-def get_bot_details(bot_id: str):
-    """Retorna os detalhes de um bot específico."""
+@router.get("/{bot_id}", response_model=Bot)
+async def read_bot(bot_id: str):
     if bot_id not in MOCK_BOTS_DB:
-        raise HTTPException(status_code=404, detail="Bot não encontrado")
+        raise HTTPException(status_code=404, detail="Bot not found")
     return MOCK_BOTS_DB[bot_id]
 
-
-@router.post("/", response_model=Bot, status_code=201, summary="Criar um novo Bot")
-def create_bot(bot: BotCreate):
-    """
-    Cria um novo Bot no sistema.
-    Corrige o erro de 'AttributeError' tratando ai_config como dict.
-    """
-    
-    # Gerar um ID único para o novo bot
-    new_bot_id = str(uuid.uuid4())
-
-    # --- INÍCIO DA CORREÇÃO DO ERRO 'AttributeError: 'dict' object has no attribute 'model_dump'' ---
-    
-    # Verifica se ai_config é um dicionário (o que causou o erro) ou um modelo Pydantic.
-    # Se já é um dict, usamos ele. Caso contrário, chamamos model_dump() (o padrão Pydantic).
-    if isinstance(bot.ai_config, dict):
-        ai_config_dict = bot.ai_config
-    else:
-        # Esta linha é a lógica padrão se o campo tivesse sido validado como um sub-modelo Pydantic
-        ai_config_dict = bot.ai_config.model_dump() 
-        
-    # --- FIM DA CORREÇÃO ---
-    
-    # Criar o dicionário final para salvar no mock DB
-    bot_data = bot.model_dump(exclude_none=True)
-    bot_data["id"] = new_bot_id
-    bot_data["ai_config"] = ai_config_dict
-    
-    MOCK_BOTS_DB[new_bot_id] = bot_data
-    
-    return bot_data
-
-@router.put("/import", summary="Importar Bots a partir de um JSON", response_model=Dict[str, Any])
-def import_bots(file_data: BotListFile):
-    """
-    Importa uma lista de bots a partir de um arquivo JSON (BotListFile).
-    Os bots existentes com o mesmo ID serão substituídos (UPSERT).
-    """
+@router.put("/import", response_model=Dict[str, Any])
+async def import_bots(bot_list_file: BotListFile):
     imported_count = 0
-    
-    for bot in file_data.bots:
-        # Convertendo o modelo Bot (que tem o ID) para um dicionário
-        bot_dict = bot.model_dump(exclude_none=True)
-        
-        # Simula a inserção ou substituição (upsert)
-        MOCK_BOTS_DB[bot_dict["id"]] = bot_dict
+    for bot_data in bot_list_file.bots:
+        # Se o bot já existir, ele será substituído.
+        MOCK_BOTS_DB[bot_data.id] = bot_data.model_dump()
         imported_count += 1
-        
-    return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bot(s) importado(s) com sucesso."}
+    return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
 
-@router.get("/export", response_model=BotListFile, summary="Exportar Todos os Bots para JSON")
-def export_bots():
+# ----------------------------------------------------------------------
+# NOVA ROTA DE CHAT (CORREÇÃO PARA O ERRO 404)
+# ----------------------------------------------------------------------
+
+# NOTE: A rota do frontend é /groups/send_message. Estamos adicionando-a aqui.
+@router.post("/groups/send_message", response_model=Dict[str, str])
+async def send_group_message(request: BotChatRequest):
     """
-    Retorna todos os bots em formato BotListFile, ideal para exportação.
+    Simula o envio de uma mensagem para o bot e retorna a resposta do Gemini.
+    O endpoint é /bots/groups/send_message, mas o frontend usa o nome completo.
     """
-    # Cria instâncias do modelo Bot a partir do Mock DB para garantir a validação de saída
-    bots_list = [Bot(**data) for data in MOCK_BOTS_DB.values()]
-    return BotListFile(bots=bots_list)
+    bot_id = request.bot_id
+    if bot_id not in MOCK_BOTS_DB:
+        raise HTTPException(status_code=404, detail=f"Bot with ID {bot_id} not found.")
+
+    bot_data = MOCK_BOTS_DB[bot_id]
+    
+    # 1. Preparar o contexto para a API Gemini (Simulação)
+    system_prompt_text = bot_data.get("system_prompt", "Você é um assistente útil.")
+    
+    formatted_contents = []
+    for msg in request.messages:
+        role = "user" if msg.role == "user" else "model"
+        formatted_contents.append({
+            "role": role,
+            "parts": [{"text": msg.text}]
+        })
+
+    # 2. Simular a chamada à API Gemini
+    
+    bot_name = bot_data['name']
+    
+    if "pimenta" in bot_name.lower():
+        # --- Resposta Dual: Pip (Pimenta) e Professor Cartola (Sarcástico) ---
+        pip_line = "🌶️ O caminho que procuras não tem placas, mas tem cheiro de saudade. Qual labirinto te trouxe aqui?"
+        cartola_line = "🎩 (Revirando a aba) Mais metáforas. Excelente. Certifique-se apenas de que o viajante ainda lembra como respirar depois de tanto 'labirinto'."
+        ai_response_text = f"{pip_line}\n\n{cartola_line}"
+    elif "cartola" in bot_name.lower():
+        ai_response_text = "Preocupe-se com o que é real. Esse questionamento não serve para nada além de ocupar espaço."
+    else:
+        ai_response_text = f"Olá, eu sou {bot_name} e esta é a minha resposta simulada."
+        
+    # Adicionamos um pequeno delay para simular o tempo de resposta da IA
+    time.sleep(0.5) 
+
+    # 3. Retornar a resposta no formato esperado pelo frontend (texto puro)
+    return {"text": ai_response_text}
