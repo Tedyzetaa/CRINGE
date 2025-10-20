@@ -85,31 +85,32 @@ class BotChatRequest(BaseModel):
 
 
 # Router
-router = APIRouter(prefix="/bots", tags=["bots"])
+# REMOVIDO o prefixo "/bots" daqui para que a rota de chat funcione em /groups/send_message
+router = APIRouter(tags=["bots"])
 
 # ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO (EXISTENTES)
+# ROTAS DE GERENCIAMENTO (AGORA COM PREFIXO MANUAL)
 # ----------------------------------------------------------------------
 
-@router.post("/", response_model=Bot)
+@router.post("/bots/", response_model=Bot)
 async def create_bot(bot_in: BotIn):
     bot_data = bot_in.model_dump()
     new_bot = Bot(**bot_data)
     MOCK_BOTS_DB[new_bot.id] = new_bot.model_dump()
     return new_bot
 
-@router.get("/", response_model=List[Bot])
+@router.get("/bots/", response_model=List[Bot])
 async def read_bots():
     # Retorna uma lista de bots a partir do dicionário de mock
     return list(MOCK_BOTS_DB.values())
 
-@router.get("/{bot_id}", response_model=Bot)
+@router.get("/bots/{bot_id}", response_model=Bot)
 async def read_bot(bot_id: str):
     if bot_id not in MOCK_BOTS_DB:
         raise HTTPException(status_code=404, detail="Bot not found")
     return MOCK_BOTS_DB[bot_id]
 
-@router.put("/import", response_model=Dict[str, Any])
+@router.put("/bots/import", response_model=Dict[str, Any])
 async def import_bots(bot_list_file: BotListFile):
     imported_count = 0
     for bot_data in bot_list_file.bots:
@@ -119,7 +120,8 @@ async def import_bots(bot_list_file: BotListFile):
     return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
 
 # ----------------------------------------------------------------------
-# NOVA ROTA DE CHAT (CORREÇÃO PARA O ERRO 404)
+# NOVA ROTA DE CHAT (CORRIGIDA)
+# Esta rota agora resolve o 404 porque o caminho não tem prefixo adicional.
 # ----------------------------------------------------------------------
 
 # NOTE: A rota do frontend é /groups/send_message. Estamos adicionando-a aqui.
@@ -127,7 +129,7 @@ async def import_bots(bot_list_file: BotListFile):
 async def send_group_message(request: BotChatRequest):
     """
     Simula o envio de uma mensagem para o bot e retorna a resposta do Gemini.
-    O endpoint é /bots/groups/send_message, mas o frontend usa o nome completo.
+    O endpoint é /groups/send_message.
     """
     bot_id = request.bot_id
     if bot_id not in MOCK_BOTS_DB:
