@@ -1,148 +1,103 @@
-# c:\cringe\3.0\models.py (ATUALIZADO)
+# models.py
 
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, Table
+import json
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
-from database import Base 
-from pydantic import BaseModel, Field 
-from typing import Optional, List, Dict, Any 
-import json 
+# Importa o tipo JSON corrigido
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON 
+from sqlalchemy.dialects.postgresql import JSON as PGJSON
+from sqlalchemy.types import TypeDecorator, Unicode
+from database import Base # Importa Base de database.py
+import datetime
+from typing import List, Dict, Any
 
-# -----------------------------------------------------
-# --- SCHEMAS PYDANTIC (Para comunicação FastAPI) ---
-# -----------------------------------------------------
-
-# Esquemas de LEITURA (SAÍDA da API)
-class UserRead(BaseModel):
-    id: int
-    name: str
-    class Config:
-        from_attributes = True
-
-class BotRead(BaseModel):
-    id: int
-    name: str
-    gender: str
-    personality: str
-    introduction: str
-    # 💡 NOVOS CAMPOS NO READ
-    avatar_url: Optional[str] = "" 
-    tags: List[str] = Field(default_factory=list)
-    # ---------------------------------
-    class Config:
-        from_attributes = True
-
-class GroupRead(BaseModel):
-    id: int
-    name: str
-    scenario: str
-    class Config:
-        from_attributes = True
-
-class MessageRead(BaseModel):
-    id: int
-    group_id: int
-    sender_id: str
-    text: str
-    class Config:
-        from_attributes = True
-
-# Esquemas de CRIAÇÃO (ENTRADA na API)
-class UserCreate(BaseModel):
-    name: str
-
-class BotCreate(BaseModel):
-    creator_id: str
-    name: str
-    gender: str = "Indefinido"
-    introduction: str = ""
-    personality: str = ""
-    welcome_message: str = ""
+# Mapeia o tipo JSON para compatibilidade entre bancos de dados
+class JSONEncodedDict(TypeDecorator):
+    """Permite armazenar e recuperar JSON como strings."""
+    impl = Unicode
     
-    # 💡 NOVOS CAMPOS NO CREATE
-    avatar_url: Optional[str] = "" 
-    tags: List[str] = Field(default_factory=list)
-    # ----------------------------------
-    
-    conversation_context: str = ""
-    context_images: list = [] 
-    system_prompt: str = ""
-    ai_config: dict = Field(default_factory=lambda: {"temperature": 0.7}) 
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            # Converte o Python dict/list para string JSON
+            return json.dumps(value)
+        return value
 
-class GroupCreate(BaseModel):
-    name: str
-    scenario: str = ""
-    bot_ids: list[int] = []
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            # Converte a string JSON para Python dict/list
+            return json.loads(value)
+        return value
 
-class MessageSend(BaseModel):
-    group_id: int
-    sender_id: str
-    text: str
+# Escolhe o tipo JSON específico do dialeto ou o genérico
+# Para simplicidade, usaremos o JSONEncodedDict que funciona bem com a maioria dos backends
+JSON_TYPE = JSONEncodedDict
 
-# -----------------------------------------------------
-# --- MÓDELOS ORM (Tabelas do Banco de Dados) ---
-# -----------------------------------------------------
-
-# 1. Tabela de Associação (Group e Bot)
-group_bot_association = Table('group_bot_association', Base.metadata,
-    Column('group_id', Integer, ForeignKey('groups.id'), primary_key=True),
-    Column('bot_id', Integer, ForeignKey('bots.id'), primary_key=True)
-)
-
-# 2. Classe User (ORM)
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True) 
-
-# 3. Classe Bot (ORM)
 class Bot(Base):
     __tablename__ = "bots"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True)
-    creator_id = Column(String)
+
+    id = Column(String, primary_key=True, index=True)
+    creator_id = Column(String, index=True) 
+    
+    # Informações básicas
+    name = Column(String, index=True)
     gender = Column(String)
-    introduction = Column(Text)
+    introduction = Column(String)
     personality = Column(Text)
     welcome_message = Column(Text)
     
-    # 💡 NOVAS COLUNAS ORM
-    avatar_url = Column(String, default="") 
-    tags = Column(Text, default="[]") # Armazenado como JSON string/Text
-    # -----------------------
+    # 💡 CORREÇÃO AQUI: tags agora usa o tipo JSON_TYPE para armazenar a lista
+    avatar_url = Column(String, nullable=True)
+    tags = Column(JSON_TYPE, default=[]) 
     
-    conversation_context = Column(Text)
-    # Campos que o ORM salva como STRING, mas armazenam JSON
-    context_images = Column(Text) 
-    system_prompt = Column(Text)
-    ai_config = Column(Text)
+    # Configurações de IA
+    conversation_context = Column(Text, nullable=True)
+    context_images = Column(JSON_TYPE, default=[]) # Lista de strings
+    system_prompt = Column(Text, nullable=True)
     
-    groups = relationship("Group", secondary=group_bot_association, back_populates="bots")
+    # Configuração de IA (JSON, ex: {"temperature": 0.7})
+    ai_config = Column(JSON_TYPE, default={}) 
 
-    # Propriedade para retornar tags como lista de strings (Usada pelo Pydantic/BotRead)
-    @property
-    def tags(self) -> List[str]:
-        try:
-            # O campo 'tags' do ORM é o texto JSON, aqui o convertemos para lista
-            return json.loads(self.tags)
-        except:
-            return []
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Relações (opcional, para grupos/chats)
+    groups = relationship("Group", back_populates="bot")
 
-# 4. Classe Group (ORM)
+    # Garante que o construtor SQLAlchemy consiga inicializar o objeto
+    def __init__(self, **kwargs):
+        # Garante que os campos JSON tenham valores padrão se não forem fornecidos
+        if 'tags' not in kwargs:
+            kwargs['tags'] = []
+        if 'context_images' not in kwargs:
+            kwargs['context_images'] = []
+        if 'ai_config' not in kwargs:
+            kwargs['ai_config'] = {}
+        super().__init__(**kwargs)
+
+
 class Group(Base):
     __tablename__ = "groups"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True)
-    scenario = Column(Text)
-    
-    bots = relationship("Bot", secondary=group_bot_association, back_populates="groups")
-    messages = relationship("Message", back_populates="group")
 
-# 5. Classe Message (ORM)
+    id = Column(String, primary_key=True, index=True)
+    bot_id = Column(String, ForeignKey("bots.id"))
+    player_id = Column(String, index=True) 
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Relação com o Bot
+    bot = relationship("Bot", back_populates="groups")
+
+    # Mensagens dentro do grupo
+    messages = relationship("Message", back_populates="group", order_by="Message.timestamp")
+
+
 class Message(Base):
     __tablename__ = "messages"
-    id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey('groups.id'))
-    sender_id = Column(String) 
+
+    id = Column(String, primary_key=True, index=True)
+    group_id = Column(String, ForeignKey("groups.id"))
+    sender_id = Column(String)  # ID de quem enviou (bot ou player)
+    sender_type = Column(String) # 'bot' ou 'player'
     text = Column(Text)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     
+    # Relação com o Grupo
     group = relationship("Group", back_populates="messages")

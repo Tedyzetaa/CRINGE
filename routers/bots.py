@@ -1,49 +1,87 @@
-# c:\cringe\3.0\routers\bots.py (ATUALIZADO)
+# routers/bots.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-import json
-from database import get_db
-# Puxe os schemas e modelos do models.py
-from models import Bot, BotRead, BotCreate 
+from schemas import BotCreate, Bot as BotSchema # Renomeado Bot para BotSchema para evitar conflito
+from models import Bot as BotModel # O modelo SQLAlchemy
+from database import SessionLocal
+import uuid
+from typing import List
 
-router = APIRouter(prefix="/bots", tags=["Bots"])
+# Importa o schema Bot do seu projeto (assumindo que ele está definido em schemas.py)
+# Se você tiver um arquivo schemas.py, garanta que ele tenha o Bot.
 
-@router.get("/", response_model=list[BotRead])
-def list_bots(db: Session = Depends(get_db)):
-    """Lista todos os bots do banco de dados."""
-    return db.query(Bot).all()
+router = APIRouter(
+    prefix="/bots",
+    tags=["bots"],
+)
 
-@router.post("/", response_model=BotRead)
+# Dependência do Banco de Dados
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- Funções CRUD (Internas) ---
+
+def get_bot(db: Session, bot_id: str):
+    return db.query(BotModel).filter(BotModel.id == bot_id).first()
+
+def get_bots(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(BotModel).offset(skip).limit(limit).all()
+
+# --- Rotas da API ---
+
+@router.post("/", response_model=BotSchema, status_code=201)
 def create_bot(bot: BotCreate, db: Session = Depends(get_db)):
-    """Cria um novo bot, serializando os campos JSON/Dicts."""
+    """Cria um novo Bot (IA) no sistema."""
     
-    # Lógica de serialização
-    tags_json = json.dumps(bot.tags)
-    ai_config_json = json.dumps(bot.ai_config)
-    context_images_json = json.dumps(bot.context_images)
+    # O Pydantic (BotCreate) garante que tags é uma List[str] e ai_config é um Dict.
+    # Passamos esses objetos Python diretamente para o modelo SQLAlchemy.
+    # O tipo JSONEncodedDict no models.py cuidará da serialização (Python -> JSON string).
     
-    db_bot = Bot(
-        name=bot.name,
+    # Converte o Pydantic BaseModel para um dicionário Python simples para ai_config
+    # Nota: Usamos .dict() ou .model_dump() (dependendo da versão do Pydantic)
+    # Aqui, assumimos uma versão que ainda usa .dict() ou que BotCreate possui um método .dict()
+    try:
+        ai_config_dict = bot.ai_config.dict() if bot.ai_config else {}
+    except AttributeError:
+        # Para Pydantic v2+
+        ai_config_dict = bot.ai_config.model_dump() if bot.ai_config else {}
+    
+    db_bot = BotModel(
+        id=str(uuid.uuid4()),
         creator_id=bot.creator_id,
+        name=bot.name,
         gender=bot.gender,
         introduction=bot.introduction,
         personality=bot.personality,
         welcome_message=bot.welcome_message,
-        
-        # 💡 Novos campos
         avatar_url=bot.avatar_url,
-        tags=tags_json, # Salva a lista de tags como JSON string
-        # ----------------
-        
+        tags=bot.tags, 
         conversation_context=bot.conversation_context,
+        context_images=bot.context_images,
         system_prompt=bot.system_prompt,
-        context_images=context_images_json, 
-        ai_config=ai_config_json
+        ai_config=ai_config_dict # Dicionário Python
     )
     
     db.add(db_bot)
     db.commit()
     db.refresh(db_bot)
-    
+    return db_bot
+
+@router.get("/", response_model=List[BotSchema])
+def read_bots(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Lista todos os Bots disponíveis."""
+    bots = get_bots(db, skip=skip, limit=limit)
+    return bots
+
+@router.get("/{bot_id}", response_model=BotSchema)
+def read_bot(bot_id: str, db: Session = Depends(get_db)):
+    """Busca um Bot específico pelo ID."""
+    db_bot = get_bot(db, bot_id=bot_id)
+    if db_bot is None:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
     return db_bot
