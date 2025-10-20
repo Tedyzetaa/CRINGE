@@ -2,7 +2,9 @@
 
 import streamlit as st
 import requests
+import json
 from typing import Optional, List, Dict, Any
+from io import BytesIO
 
 # --- Configurações Iniciais ---
 st.set_page_config(
@@ -48,6 +50,17 @@ def api_post(endpoint: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except requests.exceptions.RequestException as e:
         st.error(f"Erro de comunicação/HTTP com a API ({url}): {e}")
         return None
+    
+def api_put(endpoint: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Função para fazer requisições PUT à API (útil para importação)."""
+    url = f"{API_BASE_URL}/{endpoint.lstrip('/')}"
+    try:
+        response = requests.put(url, json=data)
+        response.raise_for_status() 
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro de comunicação/HTTP com a API ({url}): {e}")
+        return None
 
 # Função auxiliar para buscar detalhes de um bot
 @st.cache_data(ttl=60)
@@ -71,6 +84,54 @@ def exit_chat():
     st.session_state['chat_history'] = []
     st.session_state['group_id'] = None
     st.rerun()
+
+# --- Funções de Importação e Exportação ---
+
+def export_all_bots():
+    """Busca todos os bots da API e retorna um arquivo JSON para download."""
+    # Assume que a API tem um endpoint para listar todos os bots
+    bots_data = api_get("bots/")
+    
+    if bots_data is None:
+        st.error("Não foi possível carregar os dados dos bots para exportação.")
+        return None
+
+    # Envolve os dados no formato BotListFile (como definido no schemas)
+    export_content = {"bots": bots_data}
+    
+    # Converte para string JSON formatada
+    json_string = json.dumps(export_content, indent=4, ensure_ascii=False)
+    
+    # Retorna o conteúdo como BytesIO para o widget de download do Streamlit
+    return BytesIO(json_string.encode('utf-8'))
+
+def import_bots_from_json(uploaded_file):
+    """Lê o arquivo JSON, envia para a API para importação e recarrega a UI."""
+    if uploaded_file is not None:
+        try:
+            # 1. Lê o arquivo e carrega o JSON
+            json_data = json.load(uploaded_file)
+            
+            # 2. Envia os dados para o endpoint de importação da API
+            # Assume-se que o endpoint é 'bots/import' e usa o método PUT ou POST
+            with st.spinner("Importando bots..."):
+                # Usamos api_put, mas você pode mudar para api_post se preferir
+                response = api_put("bots/import", json_data) 
+            
+            # 3. Verifica a resposta
+            if response and response.get('success'):
+                imported_count = response.get('imported_count', 0)
+                st.success(f"Sucesso! {imported_count} bot(s) importado(s).")
+                # Limpa o cache para garantir que a lista seja atualizada
+                api_get.clear() 
+                st.rerun()
+            else:
+                st.error(f"Falha na importação. Detalhes: {response.get('detail', 'Erro desconhecido da API')}")
+
+        except json.JSONDecodeError:
+            st.error("Erro: O arquivo não é um JSON válido.")
+        except Exception as e:
+            st.error(f"Ocorreu um erro durante o processamento do arquivo: {e}")
 
 # --- Componente de Envio de Mensagem (Chat) ---
 
@@ -108,11 +169,15 @@ def send_message(bot_id: str, message: str, player_id: str = "jogador_mock_id", 
             st.session_state['group_id'] = response.get('group_id')
             
         # Adiciona a resposta do Bot ao histórico (Assumindo que a API retorna o texto da resposta)
+        # É importante limpar o cache de detalhes do bot para evitar erros de KeyError aqui
+        bot_details = get_bot_details(bot_id)
+        bot_name = bot_details['name'] if bot_details else "Bot"
+        
         bot_response_text = response.get('bot_response', "Desculpe, não consegui responder.")
         
         st.session_state['chat_history'].append({
             "role": "bot", 
-            "name": get_bot_details(bot_id)['name'], 
+            "name": bot_name, 
             "message": bot_response_text
         })
         
@@ -198,6 +263,40 @@ def render_selection_screen():
         # Botão que navega para a página de criação
         if st.button("➕ Criar Novo Bot", use_container_width=True, type="primary"):
             st.switch_page("pages/1_Criar_Bot.py")
+
+
+    # --- Bloco de Importação e Exportação ---
+    with st.expander("Importar/Exportar Bots", expanded=False):
+        export_col, import_col = st.columns(2)
+        
+        with export_col:
+            # Botão de Exportar
+            export_file = export_all_bots()
+            if export_file is not None:
+                st.download_button(
+                    label="⬇️ Exportar Todos os Bots (JSON)",
+                    data=export_file,
+                    file_name="cringebot_export.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+            else:
+                st.warning("Não há dados de bots disponíveis para exportação.")
+                
+        with import_col:
+            # Widget de Importar
+            uploaded_file = st.file_uploader(
+                "⬆️ Importar Bots (JSON)", 
+                type=['json'], 
+                key="bot_importer",
+                help="Faça upload de um arquivo JSON contendo uma lista de bots.",
+                accept_multiple_files=False
+            )
+            
+            # Processa a importação após o upload
+            if uploaded_file:
+                import_bots_from_json(uploaded_file)
+    # --- Fim do Bloco de Importação e Exportação ---
 
 
     if bots_data:
