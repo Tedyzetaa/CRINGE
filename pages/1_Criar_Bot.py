@@ -13,7 +13,6 @@ API_URL = "https://cringe-8h21.onrender.com"
 
 # --- Funções de Comunicação com a API ---
 
-# Reimplementação da api_get para esta página
 @st.cache_data(ttl=60)
 def api_get(endpoint: str) -> Optional[List[Dict[str, Any]]]:
     """Função para fazer requisições GET à API."""
@@ -79,9 +78,7 @@ def import_bots_from_json(uploaded_file):
             if response and response.get('success'):
                 imported_count = response.get('imported_count', 0)
                 st.success(f"Sucesso! {imported_count} bot(s) importado(s).")
-                # Limpa o cache para garantir que a lista seja atualizada na próxima navegação
                 api_get.clear() 
-                # Simplesmente recarrega a página de criação para limpar o uploader
                 time.sleep(1)
                 st.rerun() 
             else:
@@ -98,8 +95,6 @@ def import_bots_from_json(uploaded_file):
 st.header("🤖 Criação Detalhada de Bot")
 st.markdown("Use esta página para dar vida ao seu novo personagem de RPG.")
 
-# 💡 Obter user_id do Jogador (Simplesmente forçamos o valor padrão ou você pode usar st.session_state)
-# Nota: Em um app maior, você usaria st.session_state para passar o ID do jogador.
 username = st.text_input("Seu Nome de Jogador (Necessário para criar o bot)", value="admin")
 user_id = f"user-{username.lower().replace(' ', '-')}"
 
@@ -108,6 +103,7 @@ with st.form("bot_creation_form"):
     # Informações Básicas
     col1, col2 = st.columns(2)
     with col1:
+        # AQUI: bot_name pode ser capturado para uso no system_prompt placeholder
         bot_name = st.text_input("Nome do Bot", placeholder="Ex: Professor Cartola")
         bot_gender = st.selectbox("Gênero", ["Masculino", "Feminino", "Não Binário", "Indefinido"])
     with col2:
@@ -129,8 +125,15 @@ with st.form("bot_creation_form"):
 
     # Configurações Avançadas da IA
     st.subheader("Configurações da IA (Sistema)")
+    
+    # Define um placeholder mais útil
+    default_system_placeholder = (
+        f"Você é {bot_name}, um bot com a personalidade descrita..." 
+        if bot_name else "Você é [Nome do Bot], um bot com a personalidade descrita..."
+    )
+    
     system_prompt = st.text_area("System Prompt (Instrução para o Modelo Gemini)", 
-                                 placeholder=f"Você é {bot_name}, um bot com a personalidade descrita...")
+                                 placeholder=default_system_placeholder)
     
     col3, col4 = st.columns(2)
     with col3:
@@ -141,31 +144,37 @@ with st.form("bot_creation_form"):
     submitted = st.form_submit_button("✅ Salvar Bot")
 
     if submitted:
-        if not bot_name or not bot_personality or not system_prompt:
-            st.error("Por favor, preencha o Nome, Personalidade e System Prompt.")
+        # CORREÇÃO APLICADA AQUI: Usar .strip() para garantir que não há apenas espaços em branco
+        # É provável que um dos campos estivesse com espaços, o que faz a validação falhar.
+        
+        name_clean = bot_name.strip()
+        personality_clean = bot_personality.strip()
+        system_clean = system_prompt.strip()
+
+        if not name_clean or not personality_clean or not system_clean:
+            st.error("Por favor, preencha o Nome, Personalidade e System Prompt (sem deixar espaços em branco no início ou fim).")
         else:
             bot_payload = {
                 "creator_id": user_id,
-                "name": bot_name,
+                "name": name_clean,
                 "gender": bot_gender,
                 "introduction": bot_intro,
-                "personality": bot_personality,
+                "personality": personality_clean,
                 "welcome_message": bot_welcome,
                 "avatar_url": bot_avatar, 
                 "tags": [t.strip() for t in bot_tags.split(',')] if bot_tags else [],
                 "conversation_context": "", 
                 "context_images": "",  
-                "system_prompt": system_prompt,
+                "system_prompt": system_clean,
                 "ai_config": {"temperature": temperature, "max_output_tokens": max_tokens}
             }
             
             if api_post("bots", bot_payload):
-                st.success(f"Bot '{bot_name}' criado com sucesso!")
+                st.success(f"Bot '{name_clean}' criado com sucesso!")
                 time.sleep(1.5)
                 # Redireciona de volta para a Home Page
                 st.switch_page("frontend.py")
-                # Caso o st.switch_page não funcione (versão Streamlit antiga):
-                # st.info("Voltando para a Home Page em instantes...")
+                # Caso o st.switch_page não funcione, use o rerun
                 # st.rerun() 
 
 
@@ -176,7 +185,6 @@ with st.expander("Importar/Exportar Bots", expanded=False):
     export_col, import_col = st.columns(2)
     
     with export_col:
-        # Botão de Exportar
         export_file = export_all_bots()
         if export_file is not None:
             st.download_button(
@@ -190,16 +198,13 @@ with st.expander("Importar/Exportar Bots", expanded=False):
             st.warning("Não há dados de bots disponíveis para exportação.")
             
     with import_col:
-        # Widget de Importar
         uploaded_file = st.file_uploader(
             "⬆️ Importar Bots (JSON)", 
             type=['json'], 
-            key="bot_importer_page", # Chave única para evitar conflito com a Home
+            key="bot_importer_page", 
             help="Faça upload de um arquivo JSON contendo uma lista de bots.",
             accept_multiple_files=False
         )
         
-        # Processa a importação após o upload
         if uploaded_file:
             import_bots_from_json(uploaded_file)
-# --- Fim do Bloco de Importação e Exportação ---
