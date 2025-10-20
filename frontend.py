@@ -1,12 +1,12 @@
+## https://cringe-8h21.onrender.com
 import streamlit as st
 import httpx
 import os
 from typing import List, Dict, Any, Optional
-import uuid # <-- CORREÇÃO: Mover a importação para o topo para uso em layout_criar_bot
+import uuid
 
 # --- CONFIGURAÇÃO E VARIÁVEIS DE AMBIENTE ---
 # CRÍTICO: Usa a variável de ambiente para determinar o URL do backend.
-# O Streamlit DEVE ser configurado com esta variável (API_BASE_URL) para funcionar.
 API_BASE_URL = os.getenv("API_BASE_URL", "https://cringe-8h21.onrender.com")
 HTTP_CLIENT = httpx.Client(timeout=30.0)
 
@@ -26,14 +26,14 @@ class Bot:
 
 # --- FUNÇÕES DE API ---
 
-@st.cache_data(ttl=60) # Cache para evitar chamadas repetitivas
-def fetch_bots() -> List[Bot]:
-    """Busca a lista de todos os bots do backend FastAPI."""
+@st.cache_data(ttl=60) 
+def fetch_bots_data() -> List[Dict[str, Any]]: 
+    """Busca a lista de todos os bots do backend FastAPI, retornando dados brutos (dicionários)."""
     try:
         response = HTTP_CLIENT.get(f"{API_BASE_URL}/bots/")
         response.raise_for_status()
         bot_list_data = response.json()
-        return [Bot(data) for data in bot_list_data]
+        return bot_list_data # Retorna a lista de dicionários para ser cacheada
     except httpx.ConnectError as e:
         # Erro mais comum no Canvas: API não acessível ou URL incorreta
         st.error("❌ **Erro ao carregar bots do backend.**")
@@ -279,8 +279,10 @@ def main():
         layout_criar_bot()
     
     elif st.session_state.page == "listagem" or st.session_state.page == "chat_bot" and st.session_state.selected_bot is None:
-        # Carrega bots da API e de simulação local
-        api_bots = fetch_bots()
+        # Carrega dados brutos da API (cacheáveis)
+        api_bots_data = fetch_bots_data() 
+        # Converte os dados brutos em instâncias de Bot (fora do cache)
+        api_bots = [Bot(data) for data in api_bots_data] 
         
         # Se houver bots locais (criados na sessão), os adiciona
         local_bots = st.session_state.get('mock_bots', [])
