@@ -1,12 +1,13 @@
 import streamlit as st
 import httpx
 import os
-from typing import List, Dict, Any, Optional # <-- CORREÇÃO: Adicionando Optional
+from typing import List, Dict, Any, Optional
+import uuid # <-- CORREÇÃO: Mover a importação para o topo para uso em layout_criar_bot
 
 # --- CONFIGURAÇÃO E VARIÁVEIS DE AMBIENTE ---
 # CRÍTICO: Usa a variável de ambiente para determinar o URL do backend.
 # O Streamlit DEVE ser configurado com esta variável (API_BASE_URL) para funcionar.
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://cringe-8h21.onrender.com")
 HTTP_CLIENT = httpx.Client(timeout=30.0)
 
 # --- MODELOS DE DADOS SIMPLIFICADOS (Para tipagem local) ---
@@ -36,8 +37,15 @@ def fetch_bots() -> List[Bot]:
     except httpx.ConnectError as e:
         # Erro mais comum no Canvas: API não acessível ou URL incorreta
         st.error("❌ **Erro ao carregar bots do backend.**")
-        st.caption(f"Certifique-se de que a API está rodando em **{API_BASE_URL}**.")
-        st.caption(f"Detalhes: {e}")
+        
+        # Mensagem de erro aprimorada para o ambiente Canvas
+        st.caption(f"""
+            **Endereço da API:** {API_BASE_URL}
+            O Frontend não conseguiu se conectar. Se você estiver no Canvas, a causa é quase sempre:
+            1. O Backend FastAPI não está rodando.
+            2. A **Variável de Ambiente `API_BASE_URL`** no Streamlit está incorreta (deve ser o URL público do Render, não `localhost`).
+            Detalhes: {e}
+        """)
         return []
     except httpx.HTTPStatusError as e:
         st.error(f"❌ Erro HTTP ao buscar bots (Status: {e.response.status_code}). Verifique logs do FastAPI.")
@@ -153,18 +161,27 @@ def layout_listagem_bots(bots: List[Bot]):
     st.title("CríngeBot - Bots Existentes")
 
     if not bots:
-        st.warning(f"Nenhum bot encontrado ou a API não está acessível em **{API_BASE_URL}**. Tente recarregar a página.")
+        # Mensagem de warning mais informativa
+        st.warning(f"""
+            Nenhum bot encontrado ou a API não está acessível em **{API_BASE_URL}**. 
+            Se você está vendo um erro de conexão acima, por favor, defina a variável de ambiente **`API_BASE_URL`** no Streamlit para o URL público do seu backend FastAPI (ex: `https://cringe-8h21.onrender.com`).
+            Tente recarregar a página após a correção.
+        """)
         return
 
     # Renderiza os cards dos bots
+    # Adicionando um contador de bots
+    st.markdown(f"**Total de Bots:** {len(bots)}")
+    
     cols = st.columns(3)
     for i, bot in enumerate(bots):
         col = cols[i % 3]
         with col:
             with st.container(border=True):
                 # Usando um placeholder com o nome do bot se o avatar não estiver disponível
-                avatar = bot.avatar_url if bot.avatar_url else f"https://placehold.co/100x100/1e293b/ffffff?text={bot.name[0]}"
-                st.image(avatar, width=100)
+                # Adicionando Gênero ao placeholder se o nome for curto
+                placeholder_text = bot.name[0] if len(bot.name) > 0 else "BOT"
+                st.image(bot.avatar_url or f"https://placehold.co/100x100/1e293b/ffffff?text={placeholder_text}", width=100)
                 st.subheader(bot.name)
                 st.markdown(f"**Gênero:** {bot.gender}")
                 st.markdown(f"**Introdução:** {bot.introduction}")
@@ -279,5 +296,4 @@ def main():
         layout_chat_bot(st.session_state.selected_bot)
 
 if __name__ == "__main__":
-    import uuid # Necessário para o mock de criação de bot
     main()
