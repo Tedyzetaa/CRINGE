@@ -6,8 +6,9 @@ import json
 from typing import List, Dict, Any, Optional
 
 # --- CONFIGURAÇÃO ---
-# URL da sua API FastAPI (deve ser ajustada se a API não estiver no mesmo servidor/porta)
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+# URL da sua API FastAPI atualizada para o servidor Render.
+# Nota: O os.getenv é mantido, mas o valor padrão é o URL do Render.
+API_URL = os.getenv("API_URL", "https://cringe-8h21.onrender.com")
 
 # --- Modelos de Dados ---
 class ChatMessage:
@@ -52,7 +53,9 @@ def send_message_and_poll(bot_id: str, messages: List[ChatMessage], user_message
         task_data = response.json()
         task_id = task_data.get("task_id")
         
-        st.info(f"Mensagem enviada. ID da Tarefa: {task_id}. Aguardando resposta da IA (Background Task)...")
+        # O Streamlit não exibe informações no meio do código, usaremos um placeholder
+        status_placeholder = st.empty()
+        status_placeholder.info(f"Mensagem enviada. ID da Tarefa: {task_id}. Aguardando resposta da IA (Background Task)...")
 
     except requests.exceptions.RequestException as e:
         st.error(f"Erro de comunicação com a API ao enviar mensagem: {e}")
@@ -78,21 +81,22 @@ def send_message_and_poll(bot_id: str, messages: List[ChatMessage], user_message
                 
                 # Adiciona a resposta da IA ao histórico de chat
                 st.session_state.chat_history.append({"role": "ai", "content": ai_response})
+                status_placeholder.empty() # Remove a mensagem de status
                 st.rerun() # Força a atualização do Streamlit para mostrar a nova mensagem
                 return
             
             if current_status == 'error':
                 error_message = status_data.get('result', 'Erro desconhecido na tarefa de background.')
-                st.error(f"A tarefa da IA falhou: {error_message}")
+                status_placeholder.error(f"A tarefa da IA falhou: {error_message}")
                 return
 
             # Atualiza o status de espera
-            st.info(f"Status: {current_status}. Tentativa {i+1}/{max_polls}. Aguardando...")
+            status_placeholder.info(f"Status: {current_status}. Tentativa {i+1}/{max_polls}. Aguardando...")
             
         except requests.exceptions.RequestException as e:
-            st.warning(f"Erro de comunicação durante o polling. Tentando novamente... Detalhe: {e}")
+            status_placeholder.warning(f"Erro de comunicação durante o polling. Tentando novamente... Detalhe: {e}")
             
-    st.error("Tempo limite de espera pela IA excedido. Tente novamente mais tarde.")
+    status_placeholder.error("Tempo limite de espera pela IA excedido. Tente novamente mais tarde.")
 
 # --- UI PRINCIPAL ---
 
@@ -170,6 +174,11 @@ if st.session_state.selected_bot_id:
         
         # Chama a função principal de envio e polling
         send_message_and_poll(st.session_state.selected_bot_id, api_messages, user_input)
+        
+    # Se a última mensagem for do usuário e ainda não houver resposta, mostre o estado de carregamento
+    # Isso é útil para quando o Streamlit faz o rerun.
+    if st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "user":
+        pass # A função send_message_and_poll lida com o placeholder de status
 
 else:
     st.warning("Nenhum bot carregado. Verifique se sua API FastAPI está rodando e acessível em " + API_URL)
