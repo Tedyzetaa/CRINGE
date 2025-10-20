@@ -1,7 +1,7 @@
 import streamlit as st
 import httpx
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional # <-- CORREÇÃO: Adicionando Optional
 
 # --- CONFIGURAÇÃO E VARIÁVEIS DE AMBIENTE ---
 # CRÍTICO: Usa a variável de ambiente para determinar o URL do backend.
@@ -81,7 +81,7 @@ def poll_task_result(task_id: str) -> Dict[str, Optional[str]]:
 
 def layout_chat_bot(bot: Bot):
     """Página de chat individual com um bot."""
-    st.title(f"Conversando com {bot.name} {bot.gender[0]}")
+    st.title(f"Conversando com {bot.name} ({bot.gender[0]})") # Ajuste na exibição do gênero
     st.info(f"Bem-vindo(a)! **{bot.name}**: {bot.welcome_message}")
     
     # Inicializa o histórico de chat
@@ -162,7 +162,9 @@ def layout_listagem_bots(bots: List[Bot]):
         col = cols[i % 3]
         with col:
             with st.container(border=True):
-                st.image(bot.avatar_url, width=100)
+                # Usando um placeholder com o nome do bot se o avatar não estiver disponível
+                avatar = bot.avatar_url if bot.avatar_url else f"https://placehold.co/100x100/1e293b/ffffff?text={bot.name[0]}"
+                st.image(avatar, width=100)
                 st.subheader(bot.name)
                 st.markdown(f"**Gênero:** {bot.gender}")
                 st.markdown(f"**Introdução:** {bot.introduction}")
@@ -197,7 +199,7 @@ def layout_criar_bot():
                 "introduction": "Novo bot criado localmente.",
                 "personality": personality,
                 "welcome_message": f"Olá! Eu sou {name}!",
-                "avatar_url": avatar_url or "https://placehold.co/100x100/1e293b/ffffff?text=BOT",
+                "avatar_url": avatar_url or f"https://placehold.co/100x100/1e293b/ffffff?text={name[0]}",
                 "tags": ["Local", "Novo"],
                 "conversation_context": "",
                 "context_images": "",
