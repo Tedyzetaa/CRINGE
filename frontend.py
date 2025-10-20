@@ -1,300 +1,263 @@
+# Frontend.py (Streamlit)
+
 import streamlit as st
-import httpx
-import os
-from typing import List, Dict, Any, Optional
-import uuid
+import requests
+import os # Importação necessária para acessar variáveis de ambiente
+from typing import Optional, List, Dict, Any
 
-# --- CONFIGURAÇÃO E VARIÁVEIS DE AMBIENTE ---
-# CRÍTICO: Usa a variável de ambiente para determinar o URL do backend.
+# --- Configurações Iniciais ---
+st.set_page_config(
+    page_title="CringeBot - Interface Principal",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# 💡 CORREÇÃO: Usar variável de ambiente para API_BASE_URL
+# O valor padrão é a URL que você usava, mas agora ele respeita o que for configurado no ambiente.
 API_BASE_URL = os.getenv("API_BASE_URL", "https://cringe-8h21.onrender.com")
-HTTP_CLIENT = httpx.Client(timeout=30.0)
 
-# --- MODELOS DE DADOS SIMPLIFICADOS (Para tipagem local) ---
-class Bot:
-    def __init__(self, data: Dict[str, Any]):
-        self.id = data.get("id")
-        self.name = data.get("name")
-        self.gender = data.get("gender")
-        self.introduction = data.get("introduction")
-        self.personality = data.get("personality")
-        self.welcome_message = data.get("welcome_message")
-        self.avatar_url = data.get("avatar_url")
-        self.tags = data.get("tags", [])
-        self.system_prompt = data.get("system_prompt")
-        self.ai_config = data.get("ai_config", {})
+# Inicializa o estado de sessão se necessário
+if 'selected_bot_id' not in st.session_state:
+    st.session_state['selected_bot_id'] = None
+if 'chat_history' not in st.session_state:
+    st.session_state['chat_history'] = []
+if 'group_id' not in st.session_state:
+    st.session_state['group_id'] = None
 
-# --- FUNÇÕES DE API ---
 
-@st.cache_data(ttl=60) 
-def fetch_bots_data() -> List[Dict[str, Any]]: 
-    """Busca a lista de todos os bots do backend FastAPI, retornando dados brutos (dicionários)."""
+# --- Funções de Comunicação com a API ---
+
+@st.cache_data(ttl=60)
+def api_get(endpoint: str) -> Optional[List[Dict[str, Any]]]:
+    """Função para fazer requisições GET à API."""
+    url = f"{API_BASE_URL}/{endpoint.lstrip('/')}"
     try:
-        response = HTTP_CLIENT.get(f"{API_BASE_URL}/bots/")
-        response.raise_for_status()
-        bot_list_data = response.json()
-        return bot_list_data # Retorna a lista de dicionários para ser cacheada
-    except httpx.ConnectError as e:
-        # Erro mais comum no Canvas: API não acessível ou URL incorreta
-        st.error("❌ **Erro ao carregar bots do backend.**")
-        
-        # Mensagem de erro aprimorada para o ambiente Canvas
-        st.caption(f"""
-            **Endereço da API:** {API_BASE_URL}
-            O Frontend não conseguiu se conectar. Se você estiver no Canvas, a causa é quase sempre:
-            1. O Backend FastAPI não está rodando.
-            2. A **Variável de Ambiente `API_BASE_URL`** no Streamlit está incorreta (deve ser o URL público do Render, não `localhost`).
-            Detalhes: {e}
-        """)
-        return []
-    except httpx.HTTPStatusError as e:
-        st.error(f"❌ Erro HTTP ao buscar bots (Status: {e.response.status_code}). Verifique logs do FastAPI.")
-        st.caption(f"Detalhes: {e}")
-        return []
-    except Exception as e:
-        st.error(f"❌ Erro inesperado ao carregar bots: {e}")
-        return []
-
-def send_chat_message(bot_id: str, messages: List[Dict[str, str]]) -> Dict[str, str]:
-    """Envia uma mensagem de chat e retorna o task_id para polling."""
-    try:
-        payload = {
-            "bot_id": bot_id,
-            # Garantimos que a lista de mensagens tenha o formato correto para o FastAPI
-            "messages": [{"role": msg["role"], "text": msg["text"]} for msg in messages]
-        }
-        
-        response = HTTP_CLIENT.post(f"{API_BASE_URL}/groups/send_message", json=payload)
-        response.raise_for_status()
+        response = requests.get(url)
+        response.raise_for_status() 
         return response.json()
-    except httpx.HTTPStatusError as e:
-        st.error(f"❌ Erro ao enviar mensagem (Status: {e.response.status_code}).")
-        st.caption(f"Resposta do Servidor: {e.response.text}")
-        return {"error": f"HTTP Error: {e.response.status_code}"}
-    except Exception as e:
-        st.error(f"❌ Erro de conexão ou inesperado ao enviar mensagem: {e}")
-        return {"error": "Connection or Unknown Error"}
+    except requests.exceptions.RequestException as e:
+        # Melhoria no feedback de erro na barra lateral
+        st.sidebar.error(f"Erro de comunicação com API: {url}")
+        st.sidebar.caption(f"Detalhes: {e}")
+        return None
 
-def poll_task_result(task_id: str) -> Dict[str, Optional[str]]:
-    """Verifica o status da tarefa de IA pelo task_id."""
+def api_post(endpoint: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Função para fazer requisições POST à API."""
+    url = f"{API_BASE_URL}/{endpoint.lstrip('/')}"
     try:
-        response = HTTP_CLIENT.get(f"{API_BASE_URL}/tasks/{task_id}")
-        response.raise_for_status()
+        response = requests.post(url, json=data)
+        response.raise_for_status() 
         return response.json()
-    except Exception as e:
-        # Se a tarefa expirar ou for um erro 404/500, tratamos como falha de polling
-        return {"status": "error", "result": f"Falha no Polling: {e}"}
+    except requests.exceptions.RequestException as e:
+        # Mantém o erro na tela principal, mas adiciona detalhes na sidebar
+        st.error(f"Erro de comunicação/HTTP com a API ({url}): {e}")
+        st.sidebar.error("Falha ao enviar POST.")
+        return None
 
-# --- LAYOUTS/PÁGINAS ---
+# Função auxiliar para buscar detalhes de um bot
+@st.cache_data(ttl=60)
+def get_bot_details(bot_id: str) -> Optional[Dict[str, Any]]:
+    return api_get(f"bots/{bot_id}")
 
-def layout_chat_bot(bot: Bot):
-    """Página de chat individual com um bot."""
-    st.title(f"Conversando com {bot.name} ({bot.gender[0]})") # Ajuste na exibição do gênero
-    st.info(f"Bem-vindo(a)! **{bot.name}**: {bot.welcome_message}")
+# --- Funções de Estado e Navegação ---
+
+def select_bot_and_start_chat(bot_id: str):
+    """Define o bot selecionado e limpa o histórico para um novo chat."""
+    st.session_state['selected_bot_id'] = bot_id
+    st.session_state['chat_history'] = []
+    st.session_state['group_id'] = None # O ID do grupo/chat será criado no primeiro envio de mensagem
+    # Limpa o cache para recarregar os dados do bot, se necessário
+    get_bot_details.clear()
+    st.rerun()
+
+def exit_chat():
+    """Volta para a tela de seleção de bots."""
+    st.session_state['selected_bot_id'] = None
+    st.session_state['chat_history'] = []
+    st.session_state['group_id'] = None
+    st.rerun()
+
+# --- Componente de Envio de Mensagem (Chat) ---
+
+def send_message(bot_id: str, message: str, player_id: str = "jogador_mock_id", player_name: str = "Jogador"):
+    """
+    Envia a mensagem para a API e recebe a resposta do Bot.
     
-    # Inicializa o histórico de chat
-    if "messages" not in st.session_state or st.session_state.get("current_bot_id") != bot.id:
-        st.session_state.messages = []
-        st.session_state.current_bot_id = bot.id
-        st.session_state.polling_task_id = None
+    A API precisará:
+    1. Se group_id for None, criar um novo grupo (chat) usando o bot_id e o player_id.
+    2. Enviar a mensagem para o grupo/bot e receber a resposta.
+    """
+    
+    # 1. Adiciona a mensagem do usuário ao histórico (UI imediata)
+    st.session_state['chat_history'].append({"role": "user", "name": player_name, "message": message})
+    
+    # 2. Prepara os dados para a API
+    # Assumindo que a API tem um endpoint que gerencia a criação/envio de mensagem
+    data = {
+        "bot_id": bot_id,
+        "group_id": st.session_state['group_id'], # Pode ser None na primeira mensagem
+        "player_id": player_id,
+        "message_text": message
+    }
+    
+    # 3. Faz o POST para a API
+    with st.spinner("Bot pensando..."):
+        # Endpoint simulado: groups/send_message
+        # Você deve ter esta rota criada no seu backend FastAPI
+        response = api_post("groups/send_message", data)
 
-    # Exibe o histórico de mensagens
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["text"])
-
-    # Tratamento de Polling (para a resposta da IA)
-    if st.session_state.polling_task_id:
-        with st.spinner("🤖 O bot está pensando... (Processamento Assíncrono)"):
-            import time
+    # 4. Processa a resposta da API
+    if response and response.get('success'):
+        # Atualiza o group_id se for a primeira mensagem e um novo grupo foi criado
+        if st.session_state['group_id'] is None:
+            st.session_state['group_id'] = response.get('group_id')
             
-            # Limita o polling para evitar loop infinito
-            for _ in range(20): # Tenta 20 vezes
-                time.sleep(1) # Espera 1 segundo entre as checagens
-                
-                task_status = poll_task_result(st.session_state.polling_task_id)
-
-                if task_status["status"] == "complete":
-                    ai_response = task_status["result"]
-                    
-                    # 1. Adiciona a resposta da IA ao histórico
-                    st.session_state.messages.append({"role": "model", "text": ai_response})
-                    
-                    # 2. Reseta o ID da tarefa para o próximo turno
-                    st.session_state.polling_task_id = None
-                    
-                    # 3. Exibe a resposta final e recarrega a página
-                    st.rerun() # <-- CORREÇÃO
-                    return
-
-                elif task_status["status"] == "error":
-                    st.error(f"❌ Erro durante o processamento da tarefa: {task_status.get('result', 'Detalhes desconhecidos.')}")
-                    st.session_state.polling_task_id = None
-                    return
-            
-            # Se o loop terminar sem resposta, exibe timeout
-            st.warning("⚠️ Tempo de espera esgotado. A API demorou demais para responder.")
-            st.session_state.polling_task_id = None
-
-
-    # Caixa de entrada do usuário
-    if prompt := st.chat_input("Diga algo ao bot..."):
-        # 1. Adiciona a mensagem do usuário ao histórico
-        st.session_state.messages.append({"role": "user", "text": prompt})
+        # Adiciona a resposta do Bot ao histórico (Assumindo que a API retorna o texto da resposta)
+        bot_response_text = response.get('bot_response', "Desculpe, não consegui responder.")
         
-        # 2. Chama a API do FastAPI (que inicia a tarefa em background)
-        response_data = send_chat_message(bot.id, st.session_state.messages)
+        st.session_state['chat_history'].append({
+            "role": "bot", 
+            "name": get_bot_details(bot_id)['name'], 
+            "message": bot_response_text
+        })
         
-        if "task_id" in response_data:
-            # 3. Salva o task_id para iniciar o polling
-            st.session_state.polling_task_id = response_data["task_id"]
-            
-            # 4. Recarrega a página para iniciar o spinner de polling
-            st.rerun() # <-- CORREÇÃO
-        else:
-            # Erro na API
-            st.error(f"Não foi possível iniciar a tarefa de chat: {response_data.get('error', 'Erro desconhecido')}")
+    else:
+        # Se falhar, e for a primeira mensagem, o group_id permanece None
+        st.error(f"Falha na comunicação com o Bot.")
+        # Remove a última mensagem do usuário se a comunicação falhou
+        st.session_state['chat_history'].pop() 
+        
+    st.rerun() # Recarrega a UI para mostrar a nova mensagem
 
+# --- Layout da Tela de Chat ---
 
-def layout_listagem_bots(bots: List[Bot]):
-    """Página de listagem de bots existentes (página inicial preferida)."""
-    st.title("CríngeBot - Bots Existentes")
+def render_chat_screen(bot_id: str):
+    """Interface principal de chat com o Bot selecionado."""
+    bot = get_bot_details(bot_id)
 
-    if not bots:
-        # Mensagem de warning mais informativa
-        st.warning(f"""
-            Nenhum bot encontrado ou a API não está acessível em **{API_BASE_URL}**. 
-            Se você está vendo um erro de conexão acima, por favor, defina a variável de ambiente **`API_BASE_URL`** no Streamlit para o URL público do seu backend FastAPI (ex: `https://cringe-8h21.onrender.com`).
-            Tente recarregar a página após a correção.
-        """)
+    if not bot:
+        st.error("Não foi possível carregar os detalhes do Bot. Volte para a seleção.")
+        if st.button("Voltar", on_click=exit_chat): pass
         return
 
-    # Renderiza os cards dos bots
-    # Adicionando um contador de bots
-    st.markdown(f"**Total de Bots:** {len(bots)}")
+    # Cabeçalho do Chat
+    col_back, col_title = st.columns([1, 6])
+    with col_back:
+        # Use o key para garantir que o botão não cause colisões
+        if st.button("⬅️ Voltar", on_click=exit_chat, key="chat_back_button"): pass
     
-    cols = st.columns(3)
-    for i, bot in enumerate(bots):
-        col = cols[i % 3]
-        with col:
-            with st.container(border=True):
-                # Usando um placeholder com o nome do bot se o avatar não estiver disponível
-                # Adicionando Gênero ao placeholder se o nome for curto
-                placeholder_text = bot.name[0] if len(bot.name) > 0 else "BOT"
-                st.image(bot.avatar_url or f"https://placehold.co/100x100/1e293b/ffffff?text={placeholder_text}", width=100)
-                st.subheader(bot.name)
-                st.markdown(f"**Gênero:** {bot.gender}")
-                st.markdown(f"**Introdução:** {bot.introduction}")
-                
-                # Botão que define o bot atual e muda o layout
-                if st.button(f"Conversar com {bot.name}", key=bot.id):
-                    st.session_state.page = "chat_bot"
-                    st.session_state.selected_bot = bot
-                    st.rerun() # <-- CORREÇÃO
+    with col_title:
+        st.header(f"Conversando com {bot['name']}")
+    
+    st.markdown(f"*{bot['introduction']}*")
+    st.divider()
 
-# --- LAYOUT DE CRIAÇÃO (MOCK) ---
+    # Área de Histórico de Conversa
+    chat_container = st.container(height=500, border=True)
 
-def layout_criar_bot():
-    """Página de criação de um novo bot (Mock Simples)."""
-    st.title("Criar Novo Bot (Recurso Avançado)")
-    st.info("Este recurso é um mock. O bot criado será temporário na sessão.")
+    with chat_container:
+        # Exibe o histórico (incluindo a mensagem de boas-vindas inicial)
+        if not st.session_state['chat_history']:
+            st.info(f"Bem-vindo! {bot['name']} diz: *{bot['welcome_message']}*")
 
-    # Formulário de criação (simplificado)
-    name = st.text_input("Nome do Bot")
-    gender = st.selectbox("Gênero", ["Feminino", "Masculino", "Indefinido"])
-    personality = st.text_area("Personalidade (Descrição de Persona)")
-    system_prompt = st.text_area("System Prompt (Instruções para a IA)")
-    avatar_url = st.text_input("URL do Avatar (Ex: https://i.imgur.com/07kI9Qh.jpeg)")
-
-    if st.button("Salvar Bot (Mock)"):
-        if name and personality and system_prompt:
-            mock_bot_data = {
-                "id": str(uuid.uuid4()),
-                "creator_id": "user-local",
-                "name": name,
-                "gender": gender,
-                "introduction": "Novo bot criado localmente.",
-                "personality": personality,
-                "welcome_message": f"Olá! Eu sou {name}!",
-                "avatar_url": avatar_url or f"https://placehold.co/100x100/1e293b/ffffff?text={name[0]}",
-                "tags": ["Local", "Novo"],
-                "conversation_context": "",
-                "context_images": "",
-                "system_prompt": system_prompt,
-                "ai_config": {"temperature": 0.7, "max_output_tokens": 512}
-            }
-            new_bot = Bot(mock_bot_data)
+        for message_data in st.session_state['chat_history']:
+            role = message_data['role']
+            name = message_data['name']
+            message = message_data['message']
             
-            # Adiciona o bot criado ao estado da sessão (simulação de persistência)
-            if 'mock_bots' not in st.session_state:
-                st.session_state.mock_bots = []
-            st.session_state.mock_bots.append(new_bot)
-            
-            st.success(f"Bot '{name}' criado (localmente)!")
-            st.session_state.page = "listagem"
-            st.rerun() # <-- CORREÇÃO
-        else:
-            st.error("Por favor, preencha Nome, Personalidade e System Prompt.")
+            # Formatação baseada no papel
+            if role == "user":
+                with st.chat_message("user", avatar="👤"):
+                    st.write(f"**{name}:** {message}")
+            elif role == "bot":
+                avatar = bot.get('avatar_url', "🤖")
+                # Garante que o avatar do bot seja um ícone/emoji se a URL for inválida
+                display_avatar = avatar if (avatar and avatar.startswith("http")) else "🤖"
+                with st.chat_message("assistant", avatar=display_avatar):
+                    st.write(f"**{name}:** {message}")
 
-# --- NAVEGAÇÃO E APLICAÇÃO PRINCIPAL ---
+    # Formulário de Envio de Mensagem
+    with st.form(key='chat_form', clear_on_submit=True):
+        user_input = st.text_input("Sua Mensagem:", placeholder="Digite aqui...")
+        submit_button = st.form_submit_button("Enviar", use_container_width=True, type="primary")
 
-def main():
-    """Função principal que gerencia o estado e o layout da aplicação."""
-    st.set_page_config(layout="wide", page_title="CRÍNGE: Chat Assíncrono com Bots (FastAPI + Streamlit)")
-    st.markdown("## 👹 CRÍNGE: Chat Assíncrono com Bots (FastAPI + Streamlit)")
-    st.markdown("_Arquitetura Async, implementada para atender ao Ponto 5 da Revisão da Athena._")
-
-    # Inicialização do estado de sessão
-    if "page" not in st.session_state:
-        st.session_state.page = "listagem" # Inicia na listagem de bots
-    if "selected_bot" not in st.session_state:
-        st.session_state.selected_bot = None
-
-    # --- SIDEBAR (Barra Lateral) ---
-    with st.sidebar:
-        st.header("frontend")
+    if submit_button and user_input:
+        # Chama a função de envio
+        send_message(bot_id, user_input)
         
-        # Priorizamos a listagem, que agora é a página inicial
-        if st.button("Bots Existentes", key="nav_list"):
-            st.session_state.page = "listagem"
-            st.session_state.selected_bot = None
-            st.session_state.messages = [] # Limpa mensagens ao voltar para a lista
-            st.rerun() # <-- CORREÇÃO
-        
-        if st.button("Criar Bot", key="nav_create"):
-            st.session_state.page = "criar_bot"
-            st.session_state.selected_bot = None
-            st.session_state.messages = [] # Limpa mensagens ao navegar
-            st.rerun() # <-- CORREÇÃO
-        
-        # Botão extra para simular a criação de grupo (fora do escopo do chat individual)
-        st.button("Criar Grupo (Em Desenvolvimento)", key="nav_group", disabled=True)
-        
-        st.divider()
-        st.caption(f"Backend API: {API_BASE_URL}")
+    # Exibe o ID do grupo (se já criado) para fins de debug
+    if st.session_state['group_id']:
+        st.caption(f"ID do Chat (Grupo): {st.session_state['group_id']}")
 
-    # --- RENDERIZAÇÃO DA PÁGINA PRINCIPAL ---
+# --- Layout da Tela de Seleção de Bots ---
+
+def render_selection_screen():
+    """Interface para selecionar Bots disponíveis."""
     
-    if st.session_state.page == "criar_bot":
-        layout_criar_bot()
+    st.title("🤖 CringeBot - Seleção de Bots")
     
-    elif st.session_state.page == "listagem" or (st.session_state.page == "chat_bot" and st.session_state.selected_bot is None):
-        # Carrega dados brutos da API (cacheáveis)
-        api_bots_data = fetch_bots_data() 
-        # Converte os dados brutos em instâncias de Bot (fora do cache)
-        api_bots = [Bot(data) for data in api_bots_data] 
-        
-        # Se houver bots locais (criados na sessão), os adiciona
-        local_bots = st.session_state.get('mock_bots', [])
-        all_bots = api_bots + local_bots
-        
-        # Se um bot foi selecionado e estamos na listagem (caso de reruns), o leva para o chat
-        if st.session_state.page == "chat_bot" and st.session_state.selected_bot:
-             layout_chat_bot(st.session_state.selected_bot)
-        else:
-            layout_listagem_bots(all_bots)
+    col1, col2 = st.columns([3, 1])
 
-    elif st.session_state.page == "chat_bot" and st.session_state.selected_bot:
-        layout_chat_bot(st.session_state.selected_bot)
+    with col1:
+        st.header("Bots Existentes")
+        bots_data = api_get("bots/")
+        
+    with col2:
+        st.write("") 
+        # Botão que navega para a página de criação
+        if st.button("➕ Criar Novo Bot", use_container_width=True, type="primary"):
+            # st.switch_page("pages/1_Criar_Bot.py") # Descomente e ajuste se usar Multi-Page App
+            st.warning("A navegação para Criar Bot requer um Streamlit Multi-Page App. Por enquanto, a função está desabilitada.")
 
-if __name__ == "__main__":
-    main()
+
+    if bots_data:
+        st.subheader(f"Total de Bots: {len(bots_data)}")
+        
+        # Exibe os bots em um layout de cartões
+        num_columns = 4
+        cols = st.columns(num_columns)
+        
+        for i, bot in enumerate(bots_data):
+            with cols[i % num_columns]:
+                with st.container(border=True):
+                    # 🖼️ Exibe o Avatar (usa a URL do campo novo)
+                    avatar_url = bot.get('avatar_url')
+                    if avatar_url and avatar_url.startswith("http"):
+                        st.image(avatar_url, width=100)
+                    else:
+                        st.image("https://via.placeholder.com/100x100?text=Bot", width=100)
+                        
+                    st.subheader(bot['name'])
+                    st.markdown(f"**Gênero:** {bot['gender']}")
+                    # Exibindo a introdução em vez da personalidade (mais amigável para a lista)
+                    st.caption(bot['introduction']) 
+                    
+                    tags = bot.get('tags', [])
+                    if tags:
+                        st.markdown(f"**Tags:** {', '.join(tags)}")
+                        
+                    # Botão para iniciar o chat
+                    if st.button(f"Iniciar Chat", key=f"chat_{bot['id']}", use_container_width=True):
+                        # Chama a função de seleção que muda o estado e executa o rerun
+                        select_bot_and_start_chat(bot['id'])
+    else:
+        st.warning("Nenhum bot encontrado ou a API não está acessível. Verifique o backend.")
+        st.caption(f"Tentando conectar em: {API_BASE_URL}")
+
+
+# --- Lógica de Renderização Principal ---
+
+# Exibe o URL da API na barra lateral para debug
+with st.sidebar:
+    st.markdown("---")
+    st.caption(f"API Base URL: {API_BASE_URL}")
+    st.caption("Altere a variável de ambiente `API_BASE_URL` para mudar este endereço.")
+    st.markdown("---")
+
+
+if st.session_state['selected_bot_id']:
+    # Se um bot estiver selecionado, exibe a tela de chat
+    render_chat_screen(st.session_state['selected_bot_id'])
+else:
+    # Caso contrário, exibe a tela de seleção de bots
+    render_selection_screen()
