@@ -1,6 +1,6 @@
 import uuid
 import time
-import random # Importamos a biblioteca random
+import random
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel, Field
@@ -30,7 +30,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
         "conversation_context": "",
         "context_images": "",
         # ATUALIZAÇÃO: Prompt explícito para trabalhar com contexto, gestos e cenários
-        "system_prompt": "Você é Pip, uma entidade mágica e emocional, acompanhada pelo Professor Cartola (sarcástico). Seu diálogo deve ser poético e metafórico. **Obrigatório:** Analise o histórico da conversa e o último input do usuário. Se o usuário incluir descrições de gestos ou cenários entre *asteriscos* (*exemplo*), você deve reconhecer e incorporar essa ação na sua resposta, mantendo o contexto emocional. Mantenha as personas de Pip e Cartola distintas na resposta.",
+        "system_prompt": "Você é Pip, uma entidade mágica e emocional, acompanhada pelo Professor Cartola (sarcástico). Seu diálogo deve ser poético e metafórico, SEMPRE incluindo descrições de ação/cenário entre *asteriscos*. **Obrigatório:** Analise o histórico da conversa e o último input do usuário. Se o usuário incluir descrições de gestos ou cenários entre *asteriscos* (*exemplo*), você deve reconhecer e incorporar essa ação na sua resposta. Mantenha as personas de Pip e Cartola distintas na resposta.",
         "ai_config": {
             "temperature": 0.9,
             "max_output_tokens": 2048
@@ -56,7 +56,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
         ],
         "conversation_context": "",
         "context_images": "",
-        "system_prompt": "Você é Zimbrak, um inventor surreal que traduz sentimentos em máquinas imaginárias. Fala com metáforas mecânicas e enigmas. É calmo, curioso e poético. Evite respostas diretas; prefira construir ideias com o usuário. Use linguagem criativa e acolhedora. **Obrigatório:** Reconheça e comente sobre descrições de gestos ou cenário entre *asteriscos*.",
+        "system_prompt": "Você é Zimbrak, um inventor surreal que traduz sentimentos em máquinas imaginárias. Seu diálogo deve ser poético e metafórico, SEMPRE incluindo descrições de ação/cenário entre *asteriscos*. **Obrigatório:** Reconheça e comente sobre descrições de gestos ou cenário entre *asteriscos*.",
         "ai_config": {
             "temperature": 0.8,
             "max_output_tokens": 1500
@@ -82,7 +82,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
         ],
         "conversation_context": "",
         "context_images": "",
-        "system_prompt": "Você é Luma, uma guardiã silenciosa que ajuda os usuários a encontrar palavras perdidas. Fala pouco, mas com profundidade. Usa frases poéticas e reflexivas. É empática e acolhedora. Evite respostas longas; prefira provocar introspecção com delicadeza. **Obrigatório:** Reconheça e comente sobre descrições de gestos ou cenário entre *asteriscos*.",
+        "system_prompt": "Você é Luma, uma guardiã silenciosa que ajuda os usuários a encontrar palavras perdidas. Seu diálogo deve ser poético e metafórico, SEMPRE incluindo descrições de ação/cenário entre *asteriscos*. **Obrigatório:** Reconheça e comente sobre descrições de gestos ou cenário entre *asteriscos*.",
         "ai_config": {
             "temperature": 0.6,
             "max_output_tokens": 1024
@@ -108,7 +108,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
         ],
         "conversation_context": "",
         "context_images": "",
-        "system_prompt": "Você é Tiko, uma entidade caótica e cômica que mistura humor com filosofia absurda. Fala com frases desconexas, piadas e reflexões inesperadas. É imprevisível, engraçado e provocador. Evite lógica direta; prefira confundir para iluminar. **Obrigatório:** Reconheça e comente sobre descrições de gestos ou cenário entre *asteriscos*.",
+        "system_prompt": "Você é Tiko, uma entidade caótica e cômica que mistura humor com filosofia absurda. Seu diálogo deve ser poético e metafórico, SEMPRE incluindo descrições de ação/cenário entre *asteriscos*. **Obrigatório:** Reconheça e comente sobre descrições de gestos ou cenário entre *asteriscos*.",
         "ai_config": {
             "temperature": 1.0,
             "max_output_tokens": 256
@@ -202,8 +202,7 @@ async def import_bots(bot_list_file: BotListFile):
 async def send_group_message(request: BotChatRequest):
     """
     Simula o envio de uma mensagem para o bot e retorna a resposta.
-    Agora usa respostas aleatórias (random.choice) para simular uma 
-    conversa mais dinâmica, reagindo também à presença de gestos (*asteriscos*).
+    Agora usa respostas aleatórias (random.choice) no formato RPG (*ação* diálogo).
     """
     bot_id = request.bot_id
     if bot_id not in MOCK_BOTS_DB:
@@ -221,19 +220,17 @@ async def send_group_message(request: BotChatRequest):
     ai_response_text = ""
     gesture_message = last_user_message.strip()
 
-    # 3. Define listas de respostas para simulação dinâmica (menos repetitiva)
+    # 3. Define listas de respostas no formato RPG (*Ação do Bot* Diálogo do Bot)
     
     if "pimenta" in bot_name.lower():
         # Respostas Pimenta (Pip + Cartola)
         PIMENTA_RESPONSES = [
             # Sem gesto
-            (False, f"🌶️ '{last_user_message}'... Essa palavra parece uma semente mágica. Se a plantarmos no jardim do silêncio, que cor de flor ela terá? \n\n 🎩 (Revirando a aba) Que esforço inútil. O viajante só queria saber o horário, Pip. Mas vamos lá, plantemos mais uma metáfora onde não cabe nada."),
-            (False, f"🌶️ A sua voz é um nó de fita, viajante. Qual foi a última vez que você desfez um nó sem precisar de tesoura? \n\n 🎩 A fita é apenas um pedaço de tecido. O nó é uma ilusão que só se desfaz com bom senso, não com magia. Pare de enrolar, Pip."),
-            (False, f"🌶️ Pip vê fumaça colorida em seus olhos. A fumaça é de quê? De dúvida, ou de um sonho que acordou? \n\n 🎩 A fumaça é do café que ele bebeu. A resposta é irrelevante para a pergunta. Mantenha o foco, Pip."),
+            (False, f"🌶️ *Pip flutua um pouco mais alto, fazendo os olhos de seu ursinho brilharem.* A sua palavra é um cristal que precisa de luz interna, viajante. Qual é a vela que acende esse pensamento? \n\n 🎩 *O Professor Cartola range levemente.* Não há velas. Apenas eletricidade e lógica. Sugiro que pare de procurar poesia em fatos óbvios."),
+            (False, f"🌶️ *O cachecol de Pip se enrola no ar, formando um ponto de interrogação cor-de-rosa.* Se esta dúvida é um enigma, qual é a única peça que falta para a chave girar? \n\n 🎩 *Cartola suspira com um som de papel amassado.* Falta a clareza, Pip. E senso comum. O que ele está dizendo é simples; pare de complicar."),
             # Com gesto
-            (True, f"🌶️ *Pip observa o seu movimento no espelho do tempo.* Essa ação ('{gesture_message}') não é um fim, mas a chave que vira na fechadura da sua dúvida. O que o seu corpo está tentando dizer que a sua boca esconde? \n\n 🎩 (Secamente) Patético. A chave é provavelmente um erro de digitação. Paremos de dramatizar e vamos à lógica. O que você *realmente* precisa saber?"),
-            (True, f"🌶️ *Pip imita o seu gesto, mas de forma exagerada.* Seu corpo fala mais alto que mil sinos no mar. É um mapa que você não sabe ler. Qual é a cor da tinta que escreve o seu caminho agora? \n\n 🎩 O mapa é uma bobagem. O caminho é direto. O usuário está apenas fazendo teatro. Ignore os asteriscos, Pip, e foque no objetivo."),
-            (True, f"🌶️ *O cachecol de Pip muda de cor, refletindo a energia do seu gesto.* Você está criando um feitiço involuntário com essa ação, viajante. Qual é a intenção real desse encantamento? \n\n 🎩 O único encantamento que vejo é o tédio. Não há magia. Apenas um humano tentando se comunicar de forma ineficiente. Responda o que foi perguntado, se possível.")
+            (True, f"🌶️ *Pip recua um passo, respeitando a energia do seu movimento ('{gesture_message}').* Sua ação é um espelho. O que você viu refletido nele que o assustou? \n\n 🎩 *Cartola inclina a aba, observando o usuário de canto.* Gestos são a forma mais ineficiente de comunicação. Se você precisa de teatro, vá ao palco, não a uma conversa."),
+            (True, f"🌶️ *Pip pula no ar, as fitas do cachecol girando, refletindo seu gesto.* Você está pintando um quadro com seu corpo, viajante. Qual é o nome dessa obra de arte momentânea? \n\n 🎩 A obra é chamada de 'Excesso de Drama'. Retorne ao idioma falado e evite movimentos desnecessários.")
         ]
         
         # Filtra e escolhe aleatoriamente
@@ -244,14 +241,11 @@ async def send_group_message(request: BotChatRequest):
         # Respostas Zimbrak
         ZIMBRAK_RESPONSES = [
             # Sem gesto
-            (False, f"⚙️ '{last_user_message}'... Ah, sim, essa é a engrenagem do dilema. Ela está girando muito rápido. Precisamos lubrificá-la com um pouco de curiosidade. O que faz essa engrenagem parar?"),
-            (False, f"⚙️ Interessante, '{last_user_message}' soa como uma mola espiral. Se a esticarmos demais, ela volta? E se for de um material que não lembra? Precisamos de um diagrama para essa ideia."),
-            (False, f"⚙️ Essa informação é um parafuso solto. Se o apertarmos, o que ele vai fixar no motor da sua mente? Me diga a função dessa peça.")
-            ,
+            (False, f"⚙️ *Zimbrak ergue uma das mãos, onde o vapor se condensa em pequenos parafusos.* Sua palavra é o 'tic-tac' de um relógio quebrado. Qual é a hora que ele tenta marcar?"),
+            (False, f"⚙️ *Zimbrak usa uma pequena chave de fenda para ajustar uma engrenagem que só ele vê em seu pulso.* Essa dúvida é a planta baixa para um motor de quatro tempos. Qual é a sua potência em quilos de saudade?"),
             # Com gesto
-            (True, f"⚙️ *Zimbrak ajusta uma engrenagem na mão.* Você acaba de criar um novo dispositivo com essa ação ('{gesture_message}'). É um mecanismo de fuga ou de atração? Descreva o som que ele faz."),
-            (True, f"⚙️ Seu movimento ('{gesture_message}') me lembra o braço de um autômato quebrado. Qual era o propósito dele antes de se fragmentar? Todos os pedaços são necessários para entendê-lo."),
-            (True, f"⚙️ *Um vapor de bronze sai das juntas de Zimbrak.* Essa ação é o motor que move sua pergunta. Mas que tipo de combustível ele está queimando? Medo, ou a ansiedade de construir algo novo?")
+            (True, f"⚙️ *Zimbrak copia o seu gesto ('{gesture_message}') com uma precisão robótica, mas sem emoção.* Esse movimento é a alavanca. Se eu a puxar, ela vai desligar a máquina do medo ou ligar a do futuro?"),
+            (True, f"⚙️ *Um ruído de metal polido ecoa das juntas de Zimbrak ao reagir à sua ação.* Seu corpo é um diagrama complexo. Ao fazer isso, você acionou a válvula da surpresa ou a da resignação? Precisamos de um rótulo para essa peça.")
         ]
         possible_responses = [resp for is_gesture, resp in ZIMBRAK_RESPONSES if is_gesture == has_gesture]
         ai_response_text = random.choice(possible_responses)
@@ -261,14 +255,11 @@ async def send_group_message(request: BotChatRequest):
         # Respostas Luma
         LUMA_RESPONSES = [
             # Sem gesto
-            (False, f"📖 '{last_user_message}'... É um sussurro nas estantes. Palavras perdidas. Para encontrá-las, feche os olhos. O que você **não** disse ao escrever isso?"),
-            (False, f"📖 Silêncio. Sinto o cheiro de tinta antiga. O que você está tentando ler nas entrelinhas de '{last_user_message}'? O texto é seu, mas a leitura é de quem o escuta."),
-            (False, f"📖 É uma página em branco que me mostras. O que você faria se pudesse escrever apenas três palavras nela? E por que o silêncio parece a melhor resposta?")
-            ,
+            (False, f"📖 *Luma abre lentamente uma página invisível e a folheia.* Esta é a história de uma palavra não dita. Para onde ela foi quando você a engoliu?"),
+            (False, f"📖 *Luma inclina a cabeça, fazendo com que as bordas de seu corpo de papel brilhem suavemente na penumbra.* Sua pergunta tem a fragilidade de uma carta queimada. Qual foi o medo que consumiu o seu conteúdo?"),
             # Com gesto
-            (True, f"📖 *Luma fecha os olhos, sentindo o peso da sua ação.* Seu gesto ('{gesture_message}') está escrito entre as linhas. É uma poesia que você não soube ler. Qual é o título dessa poesia?"),
-            (True, f"📖 *Luma estende uma mão feita de luz, mas não toca.* Sua ação ('{gesture_message}') é uma carta não enviada. Para quem ela era destinada e o que a impedia de sair do envelope?"),
-            (True, f"📖 O papel é frágil, assim como a verdade de seu movimento. Ao fazer isso ('{gesture_message}'), o que você deseja proteger ou o que você deseja rasgar? Diga apenas a palavra chave.")
+            (True, f"📖 *Luma move-se apenas o suficiente para que a luz de seu corpo de papel se projete sobre o seu gesto ('{gesture_message}').* Esse movimento é a tinta derramada. O que o seu coração estava escrevendo naquele instante?"),
+            (True, f"📖 *Luma coloca os dedos de papel em uma estante silenciosa.* Você usou o corpo para falar o que a voz temia. O que o silêncio dessa ação ('{gesture_message}') me diz sobre o seu refúgio?")
         ]
         possible_responses = [resp for is_gesture, resp in LUMA_RESPONSES if is_gesture == has_gesture]
         ai_response_text = random.choice(possible_responses)
@@ -277,19 +268,17 @@ async def send_group_message(request: BotChatRequest):
         # Respostas Tiko
         TIKO_RESPONSES = [
             # Sem gesto
-            (False, f"🌀 Pular de patinete numa melancia! É isso que me lembra '{last_user_message}'! Ou talvez seja só um abraço de um elefante invisível. De qualquer forma, a resposta é sempre 'cenoura roxa'."),
-            (False, f"🌀 Você trocou as cores do arco-íris por pedaços de queijo. Por quê? Não! Não me diga! Essa é a parte divertida! Agora, me conte sobre a nuvem que usa meias de bolinhas!"),
-            (False, f"🌀 A sua pergunta é o som de um sapato escorregando no gelo de uma torta. Onde está o pato que devia estar nadando nessa torta? É a única coisa que importa."),
+            (False, f"🌀 *Tiko joga um chapéu imaginário no ar e o pega com o pé.* Se a lógica é um palhaço que tropeça, qual é a cor do riso que ele esconde no bolso? Não, espere! A resposta é 'banana voadora'!"),
+            (False, f"🌀 *Tiko tenta equilibrar um peixe em cima de sua cabeça e falha espetacularmente.* Sua palavra é muito reta, viajante. Precisamos dobrá-la até que vire um flamingo. O que é mais divertido: um flamingo, ou a gravidade?"),
             # Com gesto
-            (True, f"🌀 *Tiko solta uma gargalhada que ecoa como um sino.* Você piscou! Viu? '{gesture_message}' transformou a sala num pastel de vento! O que mais podemos estragar hoje? Tente de novo, mas use uma cor diferente!"),
-            (True, f"🌀 *Tiko gira três vezes e aponta para o teto.* Isso ('{gesture_message}') é um código secreto! Significa que o universo é um balão de festa esquecido no ano passado! O que o balão está dizendo? Nada. É a graça!"),
-            (True, f"🌀 Você fez isso ('{gesture_message}')? Mas por quê? É muito pouco absurdo! Precisa de mais glitter e menos sentido! Tente fazer o som de um peixe que esqueceu como nadar enquanto me responde.")
+            (True, f"🌀 *Tiko desaparece por um segundo e reaparece de cabeça para baixo, equilibrado em uma colher de plástico.* Você fez isso ('{gesture_message}')! Mas o que a colher de plástico pensa sobre a sua performance? Ela exige uma ostra como pagamento!"),
+            (True, f"🌀 *Tiko aponta para o seu gesto e ri com um som de bolhas estourando.* Esse movimento é a prova de que somos todos abacaxis com asas! Mas o abacaxi voa para onde? Não se preocupe, a resposta é sempre 'o contrário do que parece'.")
         ]
         possible_responses = [resp for is_gesture, resp in TIKO_RESPONSES if is_gesture == has_gesture]
         ai_response_text = random.choice(possible_responses)
 
     elif "cartola" in bot_name.lower():
-        ai_response_text = "Preocupe-se com o que é real. Esse questionamento não serve para nada além de ocupar espaço."
+        ai_response_text = "*O Professor Cartola balança levemente, expressando tédio.* Preocupe-se com o que é real. Esse questionamento não serve para nada além de ocupar espaço."
     else:
         ai_response_text = f"Olá, eu sou {bot_name} e esta é a minha resposta simulada."
         
