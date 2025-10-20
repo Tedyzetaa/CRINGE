@@ -9,8 +9,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Body, BackgroundTasks, status
 from pydantic import BaseModel, Field
 
-# Importação de cliente HTTP assíncrono para chamadas externas (como recomendado pela Athena)
-# Assumindo que 'httpx' está disponível no ambiente.
+# Importação de cliente HTTP assíncrono para chamadas externas
 try:
     import httpx
 except ImportError:
@@ -43,6 +42,10 @@ HTTP_CLIENT = httpx.AsyncClient(timeout=15.0) # Timeouts definidos (Ponto 3 da A
 # ----------------------------------------------------------------------
 # SIMULAÇÃO DE BANCO DE DADOS E ESTRUTURA (Ponto 4)
 # ----------------------------------------------------------------------
+# Simulação de cache ou banco de dados para armazenar o status da tarefa de background
+# Chave: task_id (str), Valor: {"status": str, "result": str | None}
+TASK_RESULTS_DB: Dict[str, Dict[str, Optional[str]]] = {}
+
 MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
     # 1. BOT PIMENTA (PIP)
     "e6f4a3d9-6c51-4f8e-9d0b-2e7a1c5b8f9d": {
@@ -283,39 +286,39 @@ async def _call_gemini_api(payload: Dict[str, Any]) -> str:
 async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task_id: str):
     """
     Esta função executa a chamada lenta de IA em segundo plano.
-    Em um sistema real, ela enviaria a resposta para um banco de dados
-    ou um canal de WebSocket para o frontend (Ponto 5 da Athena).
+    Salva o resultado final no TASK_RESULTS_DB para que o frontend possa recuperá-lo via polling.
     """
+    # 1. Inicializa o status no DB de resultados
+    TASK_RESULTS_DB[task_id] = {"status": "processing", "result": None} 
+    
     try:
         bot_data = MOCK_BOTS_DB.get(bot_id)
         if not bot_data:
-            print(f"ERRO: Bot {bot_id} não encontrado para processamento em background.")
-            return
+            raise ValueError(f"Bot {bot_id} não encontrado para processamento em background.")
 
-        # 1. Preparar Payload
+        # 2. Preparar Payload
         # Recria os objetos Pydantic a partir do dict (necessário para BackgroundTasks)
         messages = [ChatMessage(**msg) for msg in request_data.get('messages', [])]
         payload = _prepare_gemini_payload(bot_data, messages)
 
-        # 2. Chamar a API Gemini (o trabalho pesado)
+        # 3. Chamar a API Gemini (o trabalho pesado)
         ai_response_text = await _call_gemini_api(payload)
 
-        # 3. Simulação de Persistência/Broadcast (Substitui a atualização em DB/WebSocket)
-        # O frontend precisa de um mecanismo para buscar este resultado.
-        print(f"✅ Tarefa {task_id} COMPLETA para {bot_data['name']}.")
-        print(f"Resposta da IA (seria enviada via WebSocket/DB): {ai_response_text[:100]}...")
-        
-        # NOTE: Para fins de demonstração, vamos simular que esta resposta estaria
-        # disponível para ser buscada, mas o frontend precisaria de um polling/WebSocket.
-        # Como o Canvas não suporta WebSocket, o frontend terá que lidar com o Task ID.
+        # 4. Atualiza o status para COMPLETO
+        TASK_RESULTS_DB[task_id]["status"] = "complete"
+        TASK_RESULTS_DB[task_id]["result"] = ai_response_text
+        print(f"✅ Tarefa {task_id} COMPLETA para {bot_data['name']}. Resposta salva.")
         
     except Exception as e:
-        print(f"❌ ERRO FATAL na tarefa de background {task_id}: {e}")
-        # Em produção, você registraria este erro no DB ou sistema de logging (Ponto 8).
+        error_message = f"❌ ERRO FATAL na tarefa de background: {e.__class__.__name__}: {e}"
+        # 5. Em caso de erro, atualiza o status para ERROR
+        TASK_RESULTS_DB[task_id]["status"] = "error"
+        TASK_RESULTS_DB[task_id]["result"] = error_message
+        print(error_message)
 
 
 # ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO (Inalteradas, exceto por Auth/Segurança implícita)
+# ROTAS DE GERENCIAMENTO E POLLING
 # ----------------------------------------------------------------------
 
 @router.post("/bots/", response_model=Bot, status_code=status.HTTP_201_CREATED)
@@ -347,15 +350,22 @@ async def import_bots(bot_list_file: BotListFile):
 async def health():
     """Rota de Health Check robusta (Ponto 13 da Athena)."""
     # Simula checagem de status de serviços críticos
-    # Em produção, checaria DB, cache e a própria API da IA (ping).
     ai_status = "ok" if GEMINI_API_KEY else "warning (chave não definida)"
     return {"status": "ok", "services": {"database": "ok (mock)", "gemini_api": ai_status}}
 
 
-# ----------------------------------------------------------------------
-# ROTA DE CHAT ASSÍNCRONA (Ponto 5 da Athena)
-# ----------------------------------------------------------------------
+# Rota para Polling (Nova rota essencial para a arquitetura assíncrona)
+@router.get("/tasks/{task_id}", response_model=Dict[str, Optional[str]])
+async def get_task_status(task_id: str):
+    """Endpoint de Polling para o frontend verificar o status da tarefa."""
+    if task_id not in TASK_RESULTS_DB:
+        # Se o ID não for encontrado, o frontend pode tratar isso como um erro ou tarefa expirada
+        raise HTTPException(status_code=404, detail="Task ID not found or expired.")
+    
+    return TASK_RESULTS_DB[task_id]
 
+
+# ROTA DE CHAT ASSÍNCRONA (Ponto 5 da Athena)
 @router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
 async def send_group_message(request: BotChatRequest, background_tasks: BackgroundTasks):
     """
@@ -369,13 +379,11 @@ async def send_group_message(request: BotChatRequest, background_tasks: Backgrou
     task_id = str(uuid.uuid4())
     
     # Adiciona a tarefa de processamento (chamada LLM) ao pool de background
-    # Passamos o dicionário da requisição, pois objetos Pydantic podem ser
-    # complexos para serialização em BackgroundTasks.
     background_tasks.add_task(_process_group_message, bot_id, request.model_dump(), task_id)
     
     # Retorna imediatamente (202 Accepted)
     return {
         "task_id": task_id,
         "status": "Processamento de IA enfileirado em Background.",
-        "message": "Sua solicitação está sendo processada. Você precisará de um mecanismo de polling ou WebSocket para receber a resposta."
+        "message": "Sua solicitação está sendo processada. O frontend fará o polling da tarefa."
     }
