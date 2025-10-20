@@ -61,3 +61,15 @@ class Group(BaseModel):
 
     class Config:
         from_attributes = True
+
+# --- Schemas para Importação/Exportação (JSON File) ---
+
+class BotListFile(BaseModel):
+    """
+    Schema para importação/exportação de múltiplos bots em um arquivo JSON.
+    Usa o schema Bot completo, que inclui 'id' e 'creator_id'.
+    """
+    bots: List[Bot] = Field(default_factory=list)
+
+    class Config:
+        from_attributes = True
