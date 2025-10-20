@@ -1,103 +1,79 @@
 # models.py
+# Define a estrutura das tabelas Bot, User e Group, e tipos de dados customizados para JSON.
 
 import json
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
-from sqlalchemy.orm import relationship
-# Importa o tipo JSON corrigido
-from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON 
-from sqlalchemy.dialects.postgresql import JSON as PGJSON
-from sqlalchemy.types import TypeDecorator, Unicode
-from database import Base # Importa Base de database.py
-import datetime
-from typing import List, Dict, Any
+from sqlalchemy import Column, String, Text
+from sqlalchemy.ext.mutable import MutableDict, MutableList
+from sqlalchemy.types import TypeDecorator, VARCHAR
 
-# Mapeia o tipo JSON para compatibilidade entre bancos de dados
+# Importa Base do nosso arquivo database.py
+from database import Base 
+
+# --- Tipos Customizados para SQLAlchemy ---
+
 class JSONEncodedDict(TypeDecorator):
-    """Permite armazenar e recuperar JSON como strings."""
-    impl = Unicode
-    
+    """Implementa o tipo dict armazenado como JSON string."""
+    impl = VARCHAR
+
     def process_bind_param(self, value, dialect):
         if value is not None:
-            # Converte o Python dict/list para string JSON
             return json.dumps(value)
-        return value
+        return None
 
     def process_result_value(self, value, dialect):
         if value is not None:
-            # Converte a string JSON para Python dict/list
             return json.loads(value)
-        return value
+        return None
 
-# Escolhe o tipo JSON específico do dialeto ou o genérico
-# Para simplicidade, usaremos o JSONEncodedDict que funciona bem com a maioria dos backends
-JSON_TYPE = JSONEncodedDict
+# --- Modelos de Dados ---
+
+class User(Base):
+    __tablename__ = "users"
+    # Adicionando a estrutura básica que seu import_script espera
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    # Você pode adicionar mais campos de usuário conforme necessário (ex: email, hashed_password)
+
+    def __repr__(self):
+        return f"<User(name='{self.name}', id='{self.id}')>"
+
 
 class Bot(Base):
     __tablename__ = "bots"
 
+    # Campos obrigatórios
     id = Column(String, primary_key=True, index=True)
-    creator_id = Column(String, index=True) 
+    creator_id = Column(String, index=True, nullable=False)
+    name = Column(String, nullable=False)
     
-    # Informações básicas
-    name = Column(String, index=True)
+    # Campos da personalidade/configuração
     gender = Column(String)
-    introduction = Column(String)
+    introduction = Column(Text)
     personality = Column(Text)
     welcome_message = Column(Text)
+    avatar_url = Column(String)
     
-    # 💡 CORREÇÃO AQUI: tags agora usa o tipo JSON_TYPE para armazenar a lista
-    avatar_url = Column(String, nullable=True)
-    tags = Column(JSON_TYPE, default=[]) 
+    # Lista de tags (Armazenada como JSON, mas tratada como List[str] no Python)
+    tags = Column(MutableList.as_mutable(JSONEncodedDict), default=[])
     
-    # Configurações de IA
-    conversation_context = Column(Text, nullable=True)
-    context_images = Column(JSON_TYPE, default=[]) # Lista de strings
-    system_prompt = Column(Text, nullable=True)
+    # Campos de IA
+    conversation_context = Column(Text)
+    context_images = Column(Text)
+    system_prompt = Column(Text, nullable=False)
     
-    # Configuração de IA (JSON, ex: {"temperature": 0.7})
-    ai_config = Column(JSON_TYPE, default={}) 
+    # Configurações de IA (Armazenado como JSON, tratado como Dict[str, Any] no Python)
+    ai_config = Column(MutableDict.as_mutable(JSONEncodedDict), default={})
 
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    
-    # Relações (opcional, para grupos/chats)
-    groups = relationship("Group", back_populates="bot")
-
-    # Garante que o construtor SQLAlchemy consiga inicializar o objeto
-    def __init__(self, **kwargs):
-        # Garante que os campos JSON tenham valores padrão se não forem fornecidos
-        if 'tags' not in kwargs:
-            kwargs['tags'] = []
-        if 'context_images' not in kwargs:
-            kwargs['context_images'] = []
-        if 'ai_config' not in kwargs:
-            kwargs['ai_config'] = {}
-        super().__init__(**kwargs)
-
+    def __repr__(self):
+        return f"<Bot(name='{self.name}', id='{self.id}')>"
 
 class Group(Base):
     __tablename__ = "groups"
-
+    # Adicionando uma estrutura básica para Group, caso seu script de importação 
+    # ou futuras funcionalidades precisem dela.
     id = Column(String, primary_key=True, index=True)
-    bot_id = Column(String, ForeignKey("bots.id"))
-    player_id = Column(String, index=True) 
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    
-    # Relação com o Bot
-    bot = relationship("Bot", back_populates="groups")
+    name = Column(String, nullable=False)
+    # Você pode adicionar mais campos (ex: creator_id, members)
 
-    # Mensagens dentro do grupo
-    messages = relationship("Message", back_populates="group", order_by="Message.timestamp")
-
-
-class Message(Base):
-    __tablename__ = "messages"
-
-    id = Column(String, primary_key=True, index=True)
-    group_id = Column(String, ForeignKey("groups.id"))
-    sender_id = Column(String)  # ID de quem enviou (bot ou player)
-    sender_type = Column(String) # 'bot' ou 'player'
-    text = Column(Text)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
-    
-    # Relação com o Grupo
-    group = relationship("Group", back_populates="messages")
+    def __repr__(self):
+        return f"<Group(name='{self.name}', id='{self.id}')>"
