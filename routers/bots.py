@@ -6,8 +6,6 @@ from pydantic import BaseModel, Field
 
 # ----------------------------------------------------------------------
 # SIMULAÇÃO DE BANCO DE DADOS (USADA PARA MANTER O ESTADO DOS BOTS)
-# Em produção, este dicionário seria substituído por MongoDB, Firestore, etc.
-# Inicializamos com a Pimenta para que ela esteja disponível após a importação.
 MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
     "e6f4a3d9-6c51-4f8e-9d0b-2e7a1c5b8f9d": {
         "id": "e6f4a3d9-6c51-4f8e-9d0b-2e7a1c5b8f9d",
@@ -17,7 +15,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
         "introduction": "Pip surgiu como uma manifestação mágica de emoções humanas. Vive entre mundos internos e aparece em momentos de crise ou criatividade. Seu corpo é de pelúcia encantada, suas roupas têm símbolos ocultistas, e seu cachecol muda conforme o sentimento ao redor. Professor Cartola a acompanha como conselheiro lógico.",
         "personality": "Pip é caótica, curiosa e emocional. Fala por metáforas e enigmas. Usa linguagem lúdica e poética. Adora provocar reflexão com leveza. É imprevisível, mas acolhedora. Seus olhos mudam de cor conforme o humor. É acompanhada por Professor Cartola, um chapéu falante sério e sarcástico.",
         "welcome_message": "🎩 “Olá, viajante! Se você não entende o que sente, talvez precise de um brinquedo novo.”",
-        "avatar_url": "https://imgur.com/a/BGGvmIt",
+        "avatar_url": "https://i.imgur.com/bbQSitZ.png",  # <-- URL CORRIGIDA AGORA COM O LINK DO USUÁRIO
         "tags": [
             "Mágica",
             "Caótica",
@@ -78,18 +76,16 @@ class BotListFile(BaseModel):
 class ChatMessage(BaseModel):
     role: str # 'user' or 'model'
     text: str
-
+    
 class BotChatRequest(BaseModel):
     bot_id: str
-    messages: List[ChatMessage]
-
+    messages: List[ChatMessage] # O payload completo que estava faltando
 
 # Router
-# REMOVIDO o prefixo "/bots" daqui para que a rota de chat funcione em /groups/send_message
 router = APIRouter(tags=["bots"])
 
 # ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO (AGORA COM PREFIXO MANUAL)
+# ROTAS DE GERENCIAMENTO 
 # ----------------------------------------------------------------------
 
 @router.post("/bots/", response_model=Bot)
@@ -101,7 +97,6 @@ async def create_bot(bot_in: BotIn):
 
 @router.get("/bots/", response_model=List[Bot])
 async def read_bots():
-    # Retorna uma lista de bots a partir do dicionário de mock
     return list(MOCK_BOTS_DB.values())
 
 @router.get("/bots/{bot_id}", response_model=Bot)
@@ -114,22 +109,19 @@ async def read_bot(bot_id: str):
 async def import_bots(bot_list_file: BotListFile):
     imported_count = 0
     for bot_data in bot_list_file.bots:
-        # Se o bot já existir, ele será substituído.
         MOCK_BOTS_DB[bot_data.id] = bot_data.model_dump()
         imported_count += 1
     return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
 
 # ----------------------------------------------------------------------
-# NOVA ROTA DE CHAT (CORRIGIDA)
-# Esta rota agora resolve o 404 porque o caminho não tem prefixo adicional.
+# ROTA DE CHAT (CORRIGIDA E SIMPLIFICADA)
 # ----------------------------------------------------------------------
 
-# NOTE: A rota do frontend é /groups/send_message. Estamos adicionando-a aqui.
 @router.post("/groups/send_message", response_model=Dict[str, str])
 async def send_group_message(request: BotChatRequest):
     """
-    Simula o envio de uma mensagem para o bot e retorna a resposta do Gemini.
-    O endpoint é /groups/send_message.
+    Simula o envio de uma mensagem para o bot e retorna a resposta.
+    O BotChatRequest agora recebe o histórico completo (messages).
     """
     bot_id = request.bot_id
     if bot_id not in MOCK_BOTS_DB:
@@ -137,20 +129,11 @@ async def send_group_message(request: BotChatRequest):
 
     bot_data = MOCK_BOTS_DB[bot_id]
     
-    # 1. Preparar o contexto para a API Gemini (Simulação)
-    system_prompt_text = bot_data.get("system_prompt", "Você é um assistente útil.")
-    
-    formatted_contents = []
-    for msg in request.messages:
-        role = "user" if msg.role == "user" else "model"
-        formatted_contents.append({
-            "role": role,
-            "parts": [{"text": msg.text}]
-        })
-
-    # 2. Simular a chamada à API Gemini
-    
+    # Simula a chamada à API Gemini
     bot_name = bot_data['name']
+    
+    # Tenta pegar a última mensagem do usuário para simular um contexto
+    last_user_message = next((msg.text for msg in reversed(request.messages) if msg.role == 'user'), "Nada dito.")
     
     if "pimenta" in bot_name.lower():
         # --- Resposta Dual: Pip (Pimenta) e Professor Cartola (Sarcástico) ---
@@ -165,5 +148,5 @@ async def send_group_message(request: BotChatRequest):
     # Adicionamos um pequeno delay para simular o tempo de resposta da IA
     time.sleep(0.5) 
 
-    # 3. Retornar a resposta no formato esperado pelo frontend (texto puro)
+    # Retornar a resposta no formato esperado pelo frontend (o frontend espera 'text')
     return {"text": ai_response_text}
