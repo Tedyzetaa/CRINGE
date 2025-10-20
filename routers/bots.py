@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from schemas import BotCreate, Bot as BotSchema # Renomeado Bot para BotSchema para evitar conflito
 from models import Bot as BotModel # O modelo SQLAlchemy
-from database import SessionLocal
+# 💡 CORREÇÃO AQUI: Importa get_db e SessionLocal de database
+from database import SessionLocal, get_db
 import uuid
 from typing import List
 
@@ -16,14 +17,7 @@ router = APIRouter(
     tags=["bots"],
 )
 
-# Dependência do Banco de Dados
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
+# A função get_db foi movida para database.py para centralização.
 # --- Funções CRUD (Internas) ---
 
 def get_bot(db: Session, bot_id: str):
