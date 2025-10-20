@@ -1,10 +1,11 @@
-# c:\cringe\3.0\routers\bots.py
+# c:\cringe\3.0\routers\bots.py (ATUALIZADO)
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 import json
 from database import get_db
-from models import Bot, BotRead, BotCreate
+# Puxe os schemas e modelos do models.py
+from models import Bot, BotRead, BotCreate 
 
 router = APIRouter(prefix="/bots", tags=["Bots"])
 
@@ -17,7 +18,11 @@ def list_bots(db: Session = Depends(get_db)):
 def create_bot(bot: BotCreate, db: Session = Depends(get_db)):
     """Cria um novo bot, serializando os campos JSON/Dicts."""
     
-    # Cria o objeto ORM, serializando campos complexos
+    # Lógica de serialização
+    tags_json = json.dumps(bot.tags)
+    ai_config_json = json.dumps(bot.ai_config)
+    context_images_json = json.dumps(bot.context_images)
+    
     db_bot = Bot(
         name=bot.name,
         creator_id=bot.creator_id,
@@ -25,11 +30,16 @@ def create_bot(bot: BotCreate, db: Session = Depends(get_db)):
         introduction=bot.introduction,
         personality=bot.personality,
         welcome_message=bot.welcome_message,
+        
+        # 💡 Novos campos
+        avatar_url=bot.avatar_url,
+        tags=tags_json, # Salva a lista de tags como JSON string
+        # ----------------
+        
         conversation_context=bot.conversation_context,
         system_prompt=bot.system_prompt,
-        # Serializa listas/dicts para TEXTO
-        context_images=json.dumps(bot.context_images), 
-        ai_config=json.dumps(bot.ai_config)
+        context_images=context_images_json, 
+        ai_config=ai_config_json
     )
     
     db.add(db_bot)
