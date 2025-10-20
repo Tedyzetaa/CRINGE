@@ -1,12 +1,47 @@
 import uuid
 import time
+import os
+import asyncio
 import json
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Body
+
+# Importações do FastAPI e Pydantic
+from fastapi import APIRouter, HTTPException, Body, BackgroundTasks, status
 from pydantic import BaseModel, Field
 
+# Importação de cliente HTTP assíncrono para chamadas externas (como recomendado pela Athena)
+# Assumindo que 'httpx' está disponível no ambiente.
+try:
+    import httpx
+except ImportError:
+    # Se httpx não estiver disponível, usamos um mock para não quebrar a aplicação,
+    # mas em um ambiente real, httpx deve ser instalado.
+    print("WARNING: httpx not found. Using synchronous time.sleep simulation for API calls.")
+    class MockHTTPXClient:
+        async def post(self, *args, **kwargs):
+            await asyncio.sleep(0.5)
+            # Simula uma resposta bem-sucedida, mas sem conteúdo real de IA
+            return type('Response', (object,), {
+                'status_code': 200,
+                'raise_for_status': lambda: None,
+                'json': lambda: {"candidates": [{"content": {"parts": [{"text": "🤖 A simulação de API está ativa. Integração real do Gemini desativada. O processamento assíncrono (Background Task) funcionou! A resposta real seria gerada aqui."}]}}]}
+            })
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc_val, exc_tb): pass
+    httpx = type('httpx', (object,), {'AsyncClient': MockHTTPXClient})
+
+
 # ----------------------------------------------------------------------
-# SIMULAÇÃO DE BANCO DE DADOS (USADA PARA MANTER O ESTADO DOS BOTS)
+# Variáveis de Configuração (Segurança - Ponto 2 da Athena)
+# ----------------------------------------------------------------------
+
+# O Canvas irá prover a chave API, mas o código deve buscá-la como se fosse uma variável de ambiente
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") 
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
+HTTP_CLIENT = httpx.AsyncClient(timeout=15.0) # Timeouts definidos (Ponto 3 da Athena)
+
+# ----------------------------------------------------------------------
+# SIMULAÇÃO DE BANCO DE DADOS E ESTRUTURA (Ponto 4)
 # ----------------------------------------------------------------------
 MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
     # 1. BOT PIMENTA (PIP)
@@ -117,7 +152,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
 }
 # ----------------------------------------------------------------------
 
-# Definições Pydantic (Inalteradas)
+# Definições Pydantic (Esquemas de Dados - Ponto 3 da Athena)
 class AIConfig(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=1.0)
     max_output_tokens: int = Field(default=512, ge=128, le=4096)
@@ -156,53 +191,134 @@ class BotListFile(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str # 'user' or 'model'
-    text: str
+    text: str = Field(min_length=1) # Validação básica (Ponto 3 da Athena)
     
 class BotChatRequest(BaseModel):
     bot_id: str
-    messages: List[ChatMessage] # O histórico completo da conversa
+    messages: List[ChatMessage] 
 
 # Router
 router = APIRouter(tags=["bots"])
 
 # ----------------------------------------------------------------------
-# FUNÇÃO PARA PREPARAR O PAYLOAD DO LLM
+# SERVIÇO GEMINI (Com Retries e Timeouts - Ponto 3 da Athena)
 # ----------------------------------------------------------------------
 
 def _prepare_gemini_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -> Dict[str, Any]:
-    """
-    Prepara o payload completo para a chamada do Gemini, incluindo o histórico
-    e as instruções de sistema.
-    """
-    # 1. Formatar Histórico de Conversa (Contents)
+    """Prepara o payload completo para a chamada do Gemini."""
+    
     contents = []
+    # O Gemini API espera 'parts' como uma lista de objetos
     for msg in messages:
-        # A API Gemini espera 'parts' como uma lista de objetos
         contents.append({"role": msg.role, "parts": [{"text": msg.text}]})
 
-    # 2. Extrair Instrução de Sistema
-    system_prompt = bot_data['system_prompt']
-    
-    # 3. Construir o payload final para generateContent
     payload = {
         "contents": contents,
         "systemInstruction": {
-            "parts": [{"text": system_prompt}]
+            "parts": [{"text": bot_data['system_prompt']}]
         },
         "generationConfig": {
             "temperature": bot_data['ai_config']['temperature'],
             "maxOutputTokens": bot_data['ai_config']['max_output_tokens']
         },
-        # Incluir modelo aqui, mas será fornecido pelo ambiente Canvas
-        # "model": "gemini-2.5-flash-preview-09-2025" 
     }
     return payload
 
+async def _call_gemini_api(payload: Dict[str, Any]) -> str:
+    """
+    Chama a API do Gemini com retries e backoff exponencial (Ponto 3 da Athena).
+    """
+    max_retries = 3
+    initial_delay = 2  # segundos
+
+    # Constrói a URL com a chave API (se disponível)
+    url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
+    
+    headers = {"Content-Type": "application/json"}
+    
+    for attempt in range(max_retries):
+        try:
+            # Chama a API de forma assíncrona (Ponto 3 da Athena)
+            response = await HTTP_CLIENT.post(url, headers=headers, json=payload)
+            response.raise_for_status() # Levanta exceção para 4xx/5xx
+
+            result = response.json()
+            
+            # Extração segura da resposta
+            text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            if text:
+                return text
+            else:
+                # Se a resposta for vazia mas o status 200, pode ser um filtro de segurança
+                raise ValueError("Resposta do LLM vazia ou inválida.")
+        
+        except httpx.HTTPStatusError as e:
+            # Erros de status (4xx, 5xx). Se for 429 (Rate Limit), tenta novamente.
+            if e.response.status_code == 429 and attempt < max_retries - 1:
+                delay = initial_delay * (2 ** attempt)
+                print(f"RATE LIMIT (429) - Tentando novamente em {delay}s...")
+                await asyncio.sleep(delay)
+            else:
+                print(f"Erro HTTP final na chamada Gemini: {e}")
+                raise HTTPException(status_code=e.response.status_code, detail=f"Erro na API Gemini: {e.response.text}")
+        
+        except (httpx.RequestError, ValueError) as e:
+            # Erros de rede, timeout ou resposta inválida.
+            if attempt < max_retries - 1:
+                delay = initial_delay * (2 ** attempt)
+                print(f"Erro de rede/resposta: {e}. Tentando novamente em {delay}s...")
+                await asyncio.sleep(delay)
+            else:
+                print(f"Erro fatal após {max_retries} tentativas: {e}")
+                raise HTTPException(status_code=503, detail="A API Gemini falhou após várias tentativas (Timeout/Rede).")
+    
+    # Retorno de segurança
+    return "Falha na comunicação com a IA."
+
+
 # ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO (Inalteradas)
+# LÓGICA DE BACKGROUND (Ponto 5 da Athena)
 # ----------------------------------------------------------------------
 
-@router.post("/bots/", response_model=Bot)
+async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task_id: str):
+    """
+    Esta função executa a chamada lenta de IA em segundo plano.
+    Em um sistema real, ela enviaria a resposta para um banco de dados
+    ou um canal de WebSocket para o frontend (Ponto 5 da Athena).
+    """
+    try:
+        bot_data = MOCK_BOTS_DB.get(bot_id)
+        if not bot_data:
+            print(f"ERRO: Bot {bot_id} não encontrado para processamento em background.")
+            return
+
+        # 1. Preparar Payload
+        # Recria os objetos Pydantic a partir do dict (necessário para BackgroundTasks)
+        messages = [ChatMessage(**msg) for msg in request_data.get('messages', [])]
+        payload = _prepare_gemini_payload(bot_data, messages)
+
+        # 2. Chamar a API Gemini (o trabalho pesado)
+        ai_response_text = await _call_gemini_api(payload)
+
+        # 3. Simulação de Persistência/Broadcast (Substitui a atualização em DB/WebSocket)
+        # O frontend precisa de um mecanismo para buscar este resultado.
+        print(f"✅ Tarefa {task_id} COMPLETA para {bot_data['name']}.")
+        print(f"Resposta da IA (seria enviada via WebSocket/DB): {ai_response_text[:100]}...")
+        
+        # NOTE: Para fins de demonstração, vamos simular que esta resposta estaria
+        # disponível para ser buscada, mas o frontend precisaria de um polling/WebSocket.
+        # Como o Canvas não suporta WebSocket, o frontend terá que lidar com o Task ID.
+        
+    except Exception as e:
+        print(f"❌ ERRO FATAL na tarefa de background {task_id}: {e}")
+        # Em produção, você registraria este erro no DB ou sistema de logging (Ponto 8).
+
+
+# ----------------------------------------------------------------------
+# ROTAS DE GERENCIAMENTO (Inalteradas, exceto por Auth/Segurança implícita)
+# ----------------------------------------------------------------------
+
+@router.post("/bots/", response_model=Bot, status_code=status.HTTP_201_CREATED)
 async def create_bot(bot_in: BotIn):
     bot_data = bot_in.model_dump()
     new_bot = Bot(**bot_data)
@@ -227,52 +343,39 @@ async def import_bots(bot_list_file: BotListFile):
         imported_count += 1
     return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
 
+@router.get("/health")
+async def health():
+    """Rota de Health Check robusta (Ponto 13 da Athena)."""
+    # Simula checagem de status de serviços críticos
+    # Em produção, checaria DB, cache e a própria API da IA (ping).
+    ai_status = "ok" if GEMINI_API_KEY else "warning (chave não definida)"
+    return {"status": "ok", "services": {"database": "ok (mock)", "gemini_api": ai_status}}
+
+
 # ----------------------------------------------------------------------
-# ROTA DE CHAT (ESTRITAMENTE CONTEXTUAL E DE RPG)
+# ROTA DE CHAT ASSÍNCRONA (Ponto 5 da Athena)
 # ----------------------------------------------------------------------
 
-@router.post("/groups/send_message", response_model=Dict[str, str])
-async def send_group_message(request: BotChatRequest):
+@router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
+async def send_group_message(request: BotChatRequest, background_tasks: BackgroundTasks):
     """
-    Simula o envio do contexto completo para o LLM. Nenhuma resposta automática ou randomizada.
-    A geração da resposta depende APENAS do LLM seguir o prompt de sistema e o histórico.
+    Inicia o processamento da IA em segundo plano e retorna o ID da tarefa imediatamente.
+    (Endereça o risco de bloqueio da requisição - Ponto 5 da Athena)
     """
     bot_id = request.bot_id
     if bot_id not in MOCK_BOTS_DB:
         raise HTTPException(status_code=404, detail=f"Bot with ID {bot_id} not found.")
 
-    bot_data = MOCK_BOTS_DB[bot_id]
+    task_id = str(uuid.uuid4())
     
-    # 1. Prepara o payload completo (Histórico + System Prompt)
-    llm_payload = _prepare_gemini_payload(bot_data, request.messages)
+    # Adiciona a tarefa de processamento (chamada LLM) ao pool de background
+    # Passamos o dicionário da requisição, pois objetos Pydantic podem ser
+    # complexos para serialização em BackgroundTasks.
+    background_tasks.add_task(_process_group_message, bot_id, request.model_dump(), task_id)
     
-    # 2. Extrai as informações principais para a confirmação
-    last_user_input = request.messages[-1].text if request.messages else "Nenhuma entrada."
-    bot_name = bot_data['name']
-    
-    # ----------------------------------------------------------------------
-    # PONTO DE INTEGRAÇÃO DA API:
-    # ----------------------------------------------------------------------
-    # Em um sistema real, o código AQUI faria uma chamada assíncrona (fetch/requests)
-    # para a API do Gemini, enviando o 'llm_payload'.
-    
-    # O Gemini usaria o 'system_prompt' (com as regras obrigatórias de RPG e cenário)
-    # e todo o 'contents' (histórico completo) para gerar a resposta.
-    
-    # A resposta final seria *dinâmica* e *contextualizada*, garantindo que 
-    # as regras de RPG (*ação* diálogo) sejam seguidas.
-    
-    # Simulação da Resposta de Confirmação (Substituindo a Chamada LLM):
-    ai_response_text = (
-        f"🤖 *Uma densa nuvem de vapor mágico se forma ao redor de {bot_name}, absorvendo o contexto da conversa.* "
-        f"A sua última ação/fala ('{last_user_input}') agora está sendo fundida com a história para EVOLUIR O CENÁRIO. "
-        f"**Instruções de Sistema Ativas:** O bot está sendo forçado a referenciar o contexto, usar o formato RPG (*ação* diálogo) e avançar a narrativa. "
-        f"A próxima resposta, se a API fosse real, seria totalmente baseada nesses elementos, garantindo coerência total."
-    )
-    # ----------------------------------------------------------------------
-        
-    # Pequeno delay para simular o tempo de processamento da IA
-    time.sleep(0.5) 
-
-    # Retornar a resposta no formato esperado pelo frontend
-    return {"text": ai_response_text}
+    # Retorna imediatamente (202 Accepted)
+    return {
+        "task_id": task_id,
+        "status": "Processamento de IA enfileirado em Background.",
+        "message": "Sua solicitação está sendo processada. Você precisará de um mecanismo de polling ou WebSocket para receber a resposta."
+    }
