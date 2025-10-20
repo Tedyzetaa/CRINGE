@@ -1,4 +1,3 @@
-## https://cringe-8h21.onrender.com
 import streamlit as st
 import httpx
 import os
@@ -124,7 +123,7 @@ def layout_chat_bot(bot: Bot):
                     st.session_state.polling_task_id = None
                     
                     # 3. Exibe a resposta final e recarrega a página
-                    st.experimental_rerun()
+                    st.rerun() # <-- CORREÇÃO
                     return
 
                 elif task_status["status"] == "error":
@@ -150,7 +149,7 @@ def layout_chat_bot(bot: Bot):
             st.session_state.polling_task_id = response_data["task_id"]
             
             # 4. Recarrega a página para iniciar o spinner de polling
-            st.experimental_rerun()
+            st.rerun() # <-- CORREÇÃO
         else:
             # Erro na API
             st.error(f"Não foi possível iniciar a tarefa de chat: {response_data.get('error', 'Erro desconhecido')}")
@@ -190,7 +189,7 @@ def layout_listagem_bots(bots: List[Bot]):
                 if st.button(f"Conversar com {bot.name}", key=bot.id):
                     st.session_state.page = "chat_bot"
                     st.session_state.selected_bot = bot
-                    st.experimental_rerun()
+                    st.rerun() # <-- CORREÇÃO
 
 # --- LAYOUT DE CRIAÇÃO (MOCK) ---
 
@@ -232,7 +231,7 @@ def layout_criar_bot():
             
             st.success(f"Bot '{name}' criado (localmente)!")
             st.session_state.page = "listagem"
-            st.experimental_rerun()
+            st.rerun() # <-- CORREÇÃO
         else:
             st.error("Por favor, preencha Nome, Personalidade e System Prompt.")
 
@@ -258,14 +257,14 @@ def main():
         if st.button("Bots Existentes", key="nav_list"):
             st.session_state.page = "listagem"
             st.session_state.selected_bot = None
-            st.session_state.messages = []
-            st.experimental_rerun()
+            st.session_state.messages = [] # Limpa mensagens ao voltar para a lista
+            st.rerun() # <-- CORREÇÃO
         
         if st.button("Criar Bot", key="nav_create"):
             st.session_state.page = "criar_bot"
             st.session_state.selected_bot = None
-            st.session_state.messages = []
-            st.experimental_rerun()
+            st.session_state.messages = [] # Limpa mensagens ao navegar
+            st.rerun() # <-- CORREÇÃO
         
         # Botão extra para simular a criação de grupo (fora do escopo do chat individual)
         st.button("Criar Grupo (Em Desenvolvimento)", key="nav_group", disabled=True)
@@ -278,7 +277,7 @@ def main():
     if st.session_state.page == "criar_bot":
         layout_criar_bot()
     
-    elif st.session_state.page == "listagem" or st.session_state.page == "chat_bot" and st.session_state.selected_bot is None:
+    elif st.session_state.page == "listagem" or (st.session_state.page == "chat_bot" and st.session_state.selected_bot is None):
         # Carrega dados brutos da API (cacheáveis)
         api_bots_data = fetch_bots_data() 
         # Converte os dados brutos em instâncias de Bot (fora do cache)
