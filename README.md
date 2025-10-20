@@ -1,73 +1,93 @@
-# 🔥 CRINGE RPG-AI Multi-Bot Backend & Frontend - Versão 1.5
+📚 Bots RPG (Role-Playing Game)
 
-Este projeto é uma plataforma de RPG de mesa onde múltiplos personagens e o Mestre do Jogo são controlados por Agentes de Inteligência Artificial (Gemini API). O projeto está dividido em Backend (FastAPI) e Frontends (Streamlit), hospedados em plataformas diferentes para máxima eficiência.
+Este projeto implementa uma API de backend que gerencia diferentes bots (NPCs) para uma experiência de Role-Playing Game (RPG) interativa. O principal foco é garantir que as respostas dos bots sejam contextuais, seguindo o histórico completo da conversa para construir narrativas coerentes e avançar os cenários de forma dinâmica.
 
-## 🚀 Status da Versão 1.5 - DEPLOY COMPLETO
+⚙️ Funcionalidades da API
 
-| Componente | Plataforma de Hospedagem | Status | URL de Produção |
-| :--- | :--- | :--- | :--- |
-| **Backend (FastAPI/IA)** | **Render** | ✅ Online 24/7 | `https://cringe-8h21.onrender.com` |
-| **Frontend (Chat Principal)** | **Streamlit Cloud** | ✅ Online 24/7 | **[A SER INSERIDO APÓS O DEPLOY]** |
-| **Frontend (Criador de Bots)**| **Streamlit Cloud** | ✅ Online 24/7 | **[A SER INSERIDO APÓS O DEPLOY]** |
+1. Modelos de Dados (Pydantic)
 
-### ⚠️ AVISO IMPORTANTE
+AIConfig: Define a configuração do modelo de IA (temperatura, tokens).
 
-O Backend está ativo, mas para que a IA funcione, a chave **`GEMINI_API_KEY`** deve ser válida e estar configurada com sucesso nas **Environment Variables** do Render.
+Bot: O modelo completo de um bot, incluindo ID, persona, prompt de sistema e configurações de IA.
 
----
+BotIn: O modelo de entrada para criação de novos bots.
 
-## 🛠️ Detalhes da Tecnologia
+ChatMessage: Representa uma mensagem individual na conversa (role e text).
 
-* **Backend Framework:** FastAPI (Python)
-* **Backend Hosting:** Render
-* **Interface de Usuário (Frontend):** Streamlit
-* **Frontend Hosting:** Streamlit Community Cloud
-* **Modelo de IA:** Google Gemini API (`gemini-2.5-flash`)
+BotChatRequest: Contém o ID do bot e o histórico completo de mensagens (messages).
 
-## 📂 Estrutura do Projeto
+2. Gerenciamento de Bots
 
-/cringe/1.1/
-├── main.py          # Aplicação FastAPI, rotas da API e lógica de IA.
-├── db.py            # Simulação de Banco de Dados (em memória).
-├── models.py        # Definição dos modelos de dados (classes Pydantic).
-├── requirements.txt # Lista de dependências Python para o Backend e Frontend.
-├── frontend.py      # Frontend Streamlit para o Chat de Interação (Aponta para o Render).
-├── bot_creator.py   # Frontend Streamlit para criar novos Agentes de IA (Aponta para o Render).
-├── Procfile         # Comando de inicialização do Uvicorn para o Render.
-├── .gitignore       # Ignora arquivos sensíveis (.env).
-└── README.md        # Este arquivo.
+POST /bots/: Cria um novo bot e o adiciona ao banco de dados simulado (MOCK_BOTS_DB).
 
+GET /bots/: Lista todos os bots disponíveis.
 
-## ⚙️ Inicialização Local para Desenvolvimento
+GET /bots/{bot_id}: Retorna os detalhes de um bot específico.
 
-Para rodar o projeto localmente para desenvolvimento ou depuração, siga os passos abaixo.
+PUT /bots/import: Importa uma lista de bots a partir de um arquivo/payload.
 
-### 1. Instalar Dependências
+3. Integração e Contexto (Feature Principal)
 
-Certifique-se de estar no ambiente Conda `(rpg-ia)`:
+3.8 Versão Anterior: Simulação de Respostas Automáticas
 
-```bash
-pip install -r requirements.txt
-2. Configurar a Chave de API
-Crie um arquivo chamado .env na pasta raiz (/cringe/1.1) e adicione sua chave.
+Anteriormente, a rota de chat utilizava simulações com listas de respostas predefinidas para os bots, resultando em interações que, embora variadas, careciam de coerência e continuidade de cenário.
 
-3. Rodar o Backend Localmente (Render Offline)
-Inicie o servidor Uvicorn no Terminal 1:
+3.9 Atualização: Geração Estritamente Contextual e RPG Avançado (VERSÃO ATUAL)
 
-Bash
+A lógica de chat foi totalmente reescrita para garantir que a resposta do bot seja gerada exclusivamente com base no contexto completo da conversa e no prompt de sistema.
 
-uvicorn main:app --reload --port 8080
-4. Rodar o Frontend Localmente
-Inicie as interfaces Streamlit no Terminal 2. Note que, ao rodar localmente, o frontend ainda tentará se comunicar com o Render, a menos que você mude o BACKEND_URL em frontend.py e bot_creator.py para http://127.0.0.1:8080.
+Mecanismo:
 
-Chat Principal: streamlit run frontend.py
+Payload Completo: A função _prepare_gemini_payload empacota o histórico completo (messages) e o Prompt de Sistema (system_prompt) do bot em um formato compatível com a API de LLM (como Gemini).
 
-Criador de Bots: streamlit run bot_creator.py
+Foco em RPG: O system_prompt de cada bot contém Regras Obrigatórias que forçam o LLM a:
 
-🧭 Rotas Principais da API (Backend no Render)
-A URL base para todas as requisições é: https://cringe-8h21.onrender.com
+Referenciar o contexto da conversa.
 
-Método	Endpoint	Descrição
-GET	/	Confirma o status da API.
-POST	/bots/create	Cria e armazena um novo Agente de IA.
-POST	/groups/send_message	Recebe mensagem do usuário e aciona múltiplas IAs em paralelo.
+Usar o formato de RPG (descrição de ação/cenário seguido por diálogo).
+
+Garantir que a resposta EVOLUA o cenário ou a cena em andamento, respondendo ativamente à última fala do usuário.
+
+Remoção de Respostas Fixas: Nenhuma resposta automática ou randomizada é usada na rota de chat, garantindo que a resposta final seja uma criação totalmente contextualizada do LLM (simulada na implementação atual).
+
+🧑‍💻 Bots Ativos
+
+Nome
+
+Gênero
+
+Personalidade
+
+Regra Específica
+
+Pimenta (Pip)
+
+Feminino
+
+Caótica, curiosa, emocional.
+
+Deve incluir a voz de Professor Cartola (sarcástico) em suas respostas.
+
+Zimbrak
+
+Masculino
+
+Inventor, surreal, calmo.
+
+Usa metáforas mecânicas/engrenagens.
+
+Luma
+
+Feminino
+
+Guardiã silenciosa, poética.
+
+Foca em palavras perdidas e entrelinhas.
+
+Tiko
+
+Indefinido
+
+Caótico, cômico, nonsense.
+
+Mistura piadas com filosofia absurda.
