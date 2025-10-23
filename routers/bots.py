@@ -12,6 +12,7 @@ from database import get_db
 from services.ai_client import AIClient 
 
 # O modelo padrão deve ser o mesmo usado na lógica de fallback do models.py
+# Usando um modelo da Google para o fallback, já que o anterior era HuggingFace
 DEFAULT_MODEL_ID = "gemini-2.5-flash" 
 AI_CLIENT = AIClient(model_id=DEFAULT_MODEL_ID)
 
@@ -31,21 +32,9 @@ class ChatRequest(BaseModel):
     # Corrigida a descrição para ser mais clara sobre o histórico
     chat_history: List[ChatMessage] = Field([], description="O histórico completo de mensagens ANTERIORES.") 
 
-class AIConfigSchema(BaseModel):
-    """
-    Schema Pydantic para as configurações de AI armazenadas no campo JSON.
-    Adicionado max_output_tokens, temperature e model_id, que são esperados do JSON.
-    """
-    model_id: str = Field(..., description="O ID do modelo de AI a ser usado.")
-    temperature: float = Field(0.7, description="Temperatura de amostragem.")
-    max_output_tokens: int = Field(512, description="Limite máximo de tokens de saída.")
-    
-    # Adicionando 'style', se for usado na lógica do system_prompt.
-    # Se 'style' não estiver no JSON, ele deve ser opcional ou o system_prompt deve ser ajustado.
-    # Assumindo que 'style' ou 'persona' do Bot é usado para o prompt.
-    # Para consistência, vou remover 'style' do AIConfigSchema se não estiver no JSON.
-    # No entanto, vamos adicionar os campos do Bot que são usados no system prompt original.
-    
+# REMOVIDO: AIConfigSchema não é mais necessário, pois BotSchema usa Dict[str, Any]
+# para o campo ai_config, permitindo mais flexibilidade na leitura do JSON do DB.
+
 class BotSchema(BaseModel):
     """
     Schema que reflete o formato de saída do método to_dict() do modelo Bot.
@@ -55,7 +44,7 @@ class BotSchema(BaseModel):
     creator_id: str
     gender: Optional[str] = None
     introduction: Optional[str] = None
-    personality: Optional[str] = None
+    personality: Optional[str] = None # Campo essencial para o prompt do chat
     welcome_message: Optional[str] = None
     avatar_url: Optional[str] = None
     tags: List[str]
@@ -64,8 +53,6 @@ class BotSchema(BaseModel):
     system_prompt: Optional[str] = None
     
     # O campo ai_config agora é um Dict[str, Any], espelhando bot.get_ai_config()
-    # Em vez de um schema Pydantic aninhado, usamos Dict[str, Any] para flexibilidade,
-    # pois a estrutura é lida dinamicamente do JSON.
     ai_config: Dict[str, Any]
 
     class Config:
@@ -88,6 +75,7 @@ def get_bot_by_id(db: Session, bot_id: str) -> DBBot: # ID deve ser str
 def list_bots(db: Session = Depends(get_db)):
     # Usamos o to_dict() para garantir que a saída seja compatível com BotSchema
     bots = db.query(DBBot).all()
+    # Retorna a lista de dicionários, pois o BotSchema usa from_attributes
     return [bot.to_dict() for bot in bots]
 
 @router.get("/{bot_id}", response_model=BotSchema)
@@ -107,10 +95,10 @@ def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_d
     ai_config = bot.get_ai_config()
     
     # O system_prompt é usado diretamente, pois agora está armazenado como um campo no Bot
-    # Se o system_prompt do DB for None, usamos um fallback
+    # Se o system_prompt do DB for None, usamos um fallback CLARO
     system_prompt = bot.system_prompt
     if not system_prompt:
-        system_prompt = f"Você é o bot '{bot.name}' com a personalidade: '{bot.personality}'. Responda de forma útil e envolvente."
+        system_prompt = f"Você é o bot '{bot.name}'. Sua personalidade é: '{bot.personality}'. Responda de forma útil, envolvente e estritamente de acordo com sua personalidade."
 
     MAX_HISTORY_MESSAGES = 10 
     history_for_api = [msg.dict() for msg in request.chat_history]
