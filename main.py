@@ -1,5 +1,11 @@
 # Seu arquivo: main.py (Backend FastAPI)
 
+# NOVO: Importa a função para carregar variáveis do arquivo .env
+from dotenv import load_dotenv
+
+# NOVO: Carrega variáveis de ambiente (como HF_API_TOKEN) do arquivo .env
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
@@ -21,7 +27,7 @@ Base.metadata.create_all(bind=engine)
 # Certifique-se de que a origem do seu Streamlit esteja aqui
 origins = [
     # Adicione a URL completa do seu Frontend Streamlit aqui, se for diferente
-    "http://localhost:8501",  # Localhost Streamlit
+    "http://localhost:8501",   # Localhost Streamlit
     "http://127.0.0.1:8501", # Outra versão de localhost
     "https://cringe-8h21.onrender.com" # Se esta for a URL do seu Streamlit
     # Você pode adicionar "*" durante o desenvolvimento, mas é menos seguro em produção
@@ -40,7 +46,7 @@ app.add_middleware(
 # Monta as rotas para /bots
 app.include_router(bots.router)
 # app.include_router(groups.router) # Exemplo: se tiver outras rotas
-# app.include_router(users.router)  # Exemplo: se tiver outras rotas
+# app.include_router(users.router)   # Exemplo: se tiver outras rotas
 
 
 # 5. Rota Raiz Simples (Para testar se a API está no ar)

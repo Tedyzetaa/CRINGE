@@ -1,9 +1,17 @@
+# Dependências do Backend (FastAPI, uvicorn, httpx, etc.)
 fastapi
 uvicorn[standard]
+sqlalchemy
 pydantic
-python-dotenv
-google-genai
+httpx
+
+# Dependências do Frontend (Streamlit)
 streamlit
 requests
-sqlalchemy
-psycopg2-binary  # Se for usar PostgreSQL
+
+# Dependências de Banco de Dados
+# O SQLAlchemy já está lá, mas precisamos do driver:
+psycopg2-binary  # Driver para PostgreSQL (recomendado para produção/Render)
+
+# Dependências de Segurança/Configuração
+python-dotenv
