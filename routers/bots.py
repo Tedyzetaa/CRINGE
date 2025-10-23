@@ -23,7 +23,8 @@ except ImportError:
             return type('Response', (object,), {
                 'status_code': 200,
                 'raise_for_status': lambda: None,
-                'json': lambda: {"candidates": [{"content": {"parts": [{"text": "🤖 A simulação de API está ativa. Integração real do Gemini desativada. O processamento assíncrono (Background Task) funcionou! A resposta real seria gerada aqui."}]}}]}
+                # Simulação de resposta da Hugging Face API para text-generation
+                'json': lambda: [{"generated_text": "🤖 A simulação de API está ativa. Integração real Hugging Face desativada. Resposta gerada com sucesso."}]
             })
         async def __aenter__(self): return self
         async def __aexit__(self, exc_type, exc_val, exc_tb): pass
@@ -31,19 +32,20 @@ except ImportError:
 
 
 # ----------------------------------------------------------------------
-# Variáveis de Configuração (Segurança - Ponto 2 da Athena)
+# Variáveis de Configuração Hugging Face (Substituição do Gemini)
 # ----------------------------------------------------------------------
 
-# O Canvas irá prover a chave API, mas o código deve buscá-la como se fosse uma variável de ambiente
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent"
-HTTP_CLIENT = httpx.AsyncClient(timeout=15.0) # Timeouts definidos (Ponto 3 da Athena)
+# O token criado por você no Hugging Face (deve ser definido em variáveis de ambiente!)
+HF_API_TOKEN = os.getenv("HF_API_TOKEN", "") 
+# URL base para a Inference API
+HF_API_BASE_URL = "https://api-inference.huggingface.co/models/"
+
+HTTP_CLIENT = httpx.AsyncClient(timeout=15.0) # Timeouts definidos
 
 # ----------------------------------------------------------------------
-# SIMULAÇÃO DE BANCO DE DADOS E ESTRUTURA (Ponto 4)
+# SIMULAÇÃO DE BANCO DE DADOS E ESTRUTURA (Mantido o código original)
 # ----------------------------------------------------------------------
 # Simulação de cache ou banco de dados para armazenar o status da tarefa de background
-# Chave: task_id (str), Valor: {"status": str, "result": str | None}
 TASK_RESULTS_DB: Dict[str, Dict[str, Optional[str]]] = {}
 
 MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
@@ -155,7 +157,7 @@ MOCK_BOTS_DB: Dict[str, Dict[str, Any]] = {
 }
 # ----------------------------------------------------------------------
 
-# Definições Pydantic (Esquemas de Dados - Ponto 3 da Athena)
+# Definições Pydantic (Esquemas de Dados - Mantido o código original)
 class AIConfig(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=1.0)
     max_output_tokens: int = Field(default=512, ge=128, le=4096)
@@ -194,7 +196,7 @@ class BotListFile(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str # 'user' or 'model'
-    text: str = Field(min_length=1) # Validação básica (Ponto 3 da Athena)
+    text: str = Field(min_length=1)
     
 class BotChatRequest(BaseModel):
     bot_id: str
@@ -204,57 +206,80 @@ class BotChatRequest(BaseModel):
 router = APIRouter(tags=["bots"])
 
 # ----------------------------------------------------------------------
-# SERVIÇO GEMINI (Com Retries e Timeouts - Ponto 3 da Athena)
+# SERVIÇO HUGGING FACE (Substituição do Serviço Gemini)
 # ----------------------------------------------------------------------
 
-def _prepare_gemini_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -> Dict[str, Any]:
-    """Prepara o payload completo para a chamada do Gemini."""
+def _prepare_hf_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -> Dict[str, Any]:
+    """
+    Prepara o payload completo no formato de PROMPT ÚNICO para a API do Hugging Face.
+    Usa o system_prompt do Bot e o histórico de mensagens.
+    """
     
-    contents = []
-    # O Gemini API espera 'parts' como uma lista de objetos
-    for msg in messages:
-        contents.append({"role": msg.role, "parts": [{"text": msg.text}]})
+    # 1. Constrói o Prompt Completo
+    full_prompt = f"{bot_data['system_prompt']}\n\n" # Inclui as regras do bot
 
+    # Adiciona o histórico de mensagens no formato User: / Assistente:
+    for msg in messages:
+        role = "Usuário" if msg.role == "user" else "Assistente"
+        full_prompt += f"{role}: {msg.text}\n"
+
+    # Adiciona a indicação para a IA responder
+    full_prompt += "Assistente: "
+    
+    # 2. Constrói o Payload
+    ai_config = bot_data.get('ai_config', {})
+    
     payload = {
-        "contents": contents,
-        "systemInstruction": {
-            "parts": [{"text": bot_data['system_prompt']}]
-        },
-        "generationConfig": {
-            "temperature": bot_data['ai_config']['temperature'],
-            "maxOutputTokens": bot_data['ai_config']['max_output_tokens']
-        },
+        "inputs": full_prompt,
+        "parameters": {
+            # O nome do parâmetro é 'max_new_tokens' na maioria dos modelos HF
+            "max_new_tokens": ai_config.get('max_output_tokens', 512), 
+            "temperature": ai_config.get('temperature', 0.8),
+            "return_full_text": False, # Retorna APENAS o texto gerado, sem o prompt
+            "do_sample": True
+        }
     }
+    
+    # Nota: Não retornamos o full_prompt_sent pois não será usado no call_hf_api
     return payload
 
-async def _call_gemini_api(payload: Dict[str, Any]) -> str:
+async def _call_hf_api(payload: Dict[str, Any], bot_id: str) -> str:
     """
-    Chama a API do Gemini com retries e backoff exponencial (Ponto 3 da Athena).
+    Chama a API do Hugging Face com retries e backoff exponencial.
     """
-    max_retries = 3
-    initial_delay = 2  # segundos
+    # Modelo Criativo de Exemplo. Você pode mudar para o que preferir!
+    HF_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta" 
+    
+    # Constrói a URL de inferência
+    url = f"{HF_API_BASE_URL}{HF_MODEL_ID}"
+    
+    # Constrói o Header com o Token
+    headers = {
+        "Authorization": f"Bearer {HF_API_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
-    # Constrói a URL com a chave API (se disponível)
-    url = f"{GEMINI_API_URL}?key={GEMINI_API_KEY}"
-    
-    headers = {"Content-Type": "application/json"}
-    
+    max_retries = 3
+    initial_delay = 2 
+
     for attempt in range(max_retries):
         try:
-            # Chama a API de forma assíncrona (Ponto 3 da Athena)
+            # Chama a API de forma assíncrona
             response = await HTTP_CLIENT.post(url, headers=headers, json=payload)
             response.raise_for_status() # Levanta exceção para 4xx/5xx
 
             result = response.json()
-            
-            # Extração segura da resposta
-            text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+
+            # Extração segura da resposta (Hugging Face text-generation API retorna uma lista)
+            text = result[0].get('generated_text', '') 
+
             if text:
-                return text
+                # O parâmetro 'return_full_text': False garante que a resposta é apenas o texto
+                return text.strip() 
             else:
-                # Se a resposta for vazia mas o status 200, pode ser um filtro de segurança
+                # A API pode retornar 200, mas com texto vazio se for filtrado por segurança.
                 raise ValueError("Resposta do LLM vazia ou inválida.")
-        
+
         except httpx.HTTPStatusError as e:
             # Erros de status (4xx, 5xx). Se for 429 (Rate Limit), tenta novamente.
             if e.response.status_code == 429 and attempt < max_retries - 1:
@@ -262,8 +287,8 @@ async def _call_gemini_api(payload: Dict[str, Any]) -> str:
                 print(f"RATE LIMIT (429) - Tentando novamente em {delay}s...")
                 await asyncio.sleep(delay)
             else:
-                print(f"Erro HTTP final na chamada Gemini: {e}")
-                raise HTTPException(status_code=e.response.status_code, detail=f"Erro na API Gemini: {e.response.text}")
+                print(f"Erro HTTP final na chamada Hugging Face: {e}")
+                raise HTTPException(status_code=e.response.status_code, detail=f"Erro na API Hugging Face: {e.response.text}")
         
         except (httpx.RequestError, ValueError) as e:
             # Erros de rede, timeout ou resposta inválida.
@@ -273,14 +298,13 @@ async def _call_gemini_api(payload: Dict[str, Any]) -> str:
                 await asyncio.sleep(delay)
             else:
                 print(f"Erro fatal após {max_retries} tentativas: {e}")
-                raise HTTPException(status_code=503, detail="A API Gemini falhou após várias tentativas (Timeout/Rede).")
-    
-    # Retorno de segurança
-    return "Falha na comunicação com a IA."
+                raise HTTPException(status_code=503, detail="A API Hugging Face falhou após várias tentativas (Timeout/Rede).")
+
+    return "Falha na comunicação com a IA." # Retorno de segurança
 
 
 # ----------------------------------------------------------------------
-# LÓGICA DE BACKGROUND (Ponto 5 da Athena)
+# LÓGICA DE BACKGROUND (Atualizado para usar a API Hugging Face)
 # ----------------------------------------------------------------------
 
 async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task_id: str):
@@ -289,20 +313,20 @@ async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task
     Salva o resultado final no TASK_RESULTS_DB para que o frontend possa recuperá-lo via polling.
     """
     # 1. Inicializa o status no DB de resultados
-    TASK_RESULTS_DB[task_id] = {"status": "processing", "result": None} 
+    TASK_RESULTS_DB[task_id] = {"status": "processing", "result": None}  
     
     try:
         bot_data = MOCK_BOTS_DB.get(bot_id)
         if not bot_data:
             raise ValueError(f"Bot {bot_id} não encontrado para processamento em background.")
 
-        # 2. Preparar Payload
+        # 2. Preparar Payload (Usa Hugging Face)
         # Recria os objetos Pydantic a partir do dict (necessário para BackgroundTasks)
         messages = [ChatMessage(**msg) for msg in request_data.get('messages', [])]
-        payload = _prepare_gemini_payload(bot_data, messages)
+        payload = _prepare_hf_payload(bot_data, messages)
 
-        # 3. Chamar a API Gemini (o trabalho pesado)
-        ai_response_text = await _call_gemini_api(payload)
+        # 3. Chamar a API Hugging Face (o trabalho pesado)
+        ai_response_text = await _call_hf_api(payload, bot_id)
 
         # 4. Atualiza o status para COMPLETO
         TASK_RESULTS_DB[task_id]["status"] = "complete"
@@ -318,7 +342,7 @@ async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task
 
 
 # ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO E POLLING
+# ROTAS DE GERENCIAMENTO E POLLING (Mantido o código original)
 # ----------------------------------------------------------------------
 
 @router.post("/bots/", response_model=Bot, status_code=status.HTTP_201_CREATED)
@@ -348,29 +372,27 @@ async def import_bots(bot_list_file: BotListFile):
 
 @router.get("/health")
 async def health():
-    """Rota de Health Check robusta (Ponto 13 da Athena)."""
+    """Rota de Health Check robusta."""
     # Simula checagem de status de serviços críticos
-    ai_status = "ok" if GEMINI_API_KEY else "warning (chave não definida)"
-    return {"status": "ok", "services": {"database": "ok (mock)", "gemini_api": ai_status}}
+    ai_status = "ok" if HF_API_TOKEN else "warning (chave HF não definida)"
+    return {"status": "ok", "services": {"database": "ok (mock)", "huggingface_api": ai_status}}
 
 
-# Rota para Polling (Nova rota essencial para a arquitetura assíncrona)
+# Rota para Polling
 @router.get("/tasks/{task_id}", response_model=Dict[str, Optional[str]])
 async def get_task_status(task_id: str):
     """Endpoint de Polling para o frontend verificar o status da tarefa."""
     if task_id not in TASK_RESULTS_DB:
-        # Se o ID não for encontrado, o frontend pode tratar isso como um erro ou tarefa expirada
         raise HTTPException(status_code=404, detail="Task ID not found or expired.")
     
     return TASK_RESULTS_DB[task_id]
 
 
-# ROTA DE CHAT ASSÍNCRONA (Ponto 5 da Athena)
+# ROTA DE CHAT ASSÍNCRONA
 @router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
 async def send_group_message(request: BotChatRequest, background_tasks: BackgroundTasks):
     """
     Inicia o processamento da IA em segundo plano e retorna o ID da tarefa imediatamente.
-    (Endereça o risco de bloqueio da requisição - Ponto 5 da Athena)
     """
     bot_id = request.bot_id
     if bot_id not in MOCK_BOTS_DB:
