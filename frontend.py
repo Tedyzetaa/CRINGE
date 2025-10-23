@@ -9,7 +9,7 @@ import time
 # --- Variáveis de Configuração ---
 
 # Tenta carregar a URL base da API (do ambiente ou usa localhost como fallback)
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://cringe-8h21.onrender.com")
 
 # --- Funções de API ---
 
@@ -320,3 +320,4 @@ def main_view():
 
 if __name__ == "__main__":
     main_view()
+
