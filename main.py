@@ -1,16 +1,24 @@
 # Seu arquivo: main.py (Backend FastAPI)
 
-# NOVO: Importa a função para carregar variáveis do arquivo .env
 from dotenv import load_dotenv
-
-# NOVO: Carrega variáveis de ambiente (como HF_API_TOKEN) do arquivo .env
 load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
-from routers import bots # Certifique-se de que o nome 'bots' está correto
-# Outros roteadores que você possa ter (ex: from routers import groups, users)
+from routers import bots
+import os
+import sys
+
+# NOVO: Importa a função de inicialização/importação do DB
+try:
+    # Assumimos que o arquivo é init_db.py e contém a função initialize_database_with_data
+    from init_db import initialize_database_with_data
+except ImportError:
+    # Se o nome do arquivo ou da função for diferente, você deve ajustar aqui.
+    print("AVISO: Módulo 'init_db' ou função 'initialize_database_with_data' não encontrado.")
+    initialize_database_with_data = None
+
 
 # 1. Cria a instância do FastAPI
 app = FastAPI(
@@ -20,39 +28,44 @@ app = FastAPI(
 )
 
 # 2. Cria as tabelas do banco de dados (se não existirem)
-# Nota: Em produção, você pode preferir usar ferramentas de migração como Alembic.
-Base.metadata.create_all(bind=engine)
+# NOTA: Este bloco sempre deve ser executado para garantir que as tabelas existam
+print("Criando tabelas no banco de dados...")
+try:
+    Base.metadata.create_all(bind=engine)
+    print("Tabelas criadas com sucesso.")
+except Exception as e:
+    print(f"ERRO CRÍTICO ao criar tabelas: {e}")
+    sys.exit(1) # Sai se não conseguir criar as tabelas
 
-# 3. Configuração de CORS (Essencial para o Streamlit rodar em outra URL, como o Render)
-# Certifique-se de que a origem do seu Streamlit esteja aqui
-origins = [
-    # Adicione a URL completa do seu Frontend Streamlit aqui, se for diferente
-    "http://localhost:8501",   # Localhost Streamlit
-    "http://127.0.0.1:8501", # Outra versão de localhost
-    "https://cringe-8h21.onrender.com" # Se esta for a URL do seu Streamlit
-    # Você pode adicionar "*" durante o desenvolvimento, mas é menos seguro em produção
-]
 
+# 3. IMPORTAÇÃO CRÍTICA PARA RENDER (Garante que os bots existam após o reset do DB)
+if initialize_database_with_data:
+    print("Iniciando importação de bots (necessário devido ao DB volátil do Render)...")
+    try:
+        initialize_database_with_data()
+        print("Bots iniciais importados com sucesso.")
+    except Exception as e:
+        print(f"ERRO FATAL ao importar bots iniciais: {e}")
+else:
+    print("Função de inicialização de dados pulada. Verifique se 'init_db.py' está correto.")
+
+
+# 4. Configuração de CORS
+# Permite todas as origens temporariamente para facilitar o deploy no Render
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permitindo tudo temporariamente para evitar problemas de CORS
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# 4. Inclusão dos Roteadores
-# Monta as rotas para /bots
+# 5. Inclusão dos Roteadores
 app.include_router(bots.router)
-# app.include_router(groups.router) # Exemplo: se tiver outras rotas
-# app.include_router(users.router)   # Exemplo: se tiver outras rotas
 
 
-# 5. Rota Raiz Simples (Para testar se a API está no ar)
+# 6. Rota Raiz Simples
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "Cringe API V3.0 is running."}
-
-# Nota: O comando de inicialização no Render deve ser:
-# uvicorn main:app --host 0.0.0.0 --port $PORT
