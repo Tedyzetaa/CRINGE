@@ -1,4 +1,4 @@
-# routers/bots.py (FINAL E COMPLETO COM CORREÇÃO DE CONEXÃO HTTPX)
+# routers/bots.py (FINAL E COMPLETO COM CORREÇÕES DE PROTOCOLO E NameError)
 
 import uuid
 import time
@@ -22,7 +22,7 @@ try:
 except ImportError:
     # Se httpx não estiver disponível, levantamos um erro.
     raise RuntimeError("A biblioteca 'httpx' é necessária. Instale com: pip install httpx")
-# Removed: HTTP_CLIENT global is removed to fix LocalProtocolError
+# HTTP_CLIENT global is removed to fix LocalProtocolError
 
 # ----------------------------------------------------------------------
 # Variáveis de Configuração Hugging Face
@@ -87,6 +87,8 @@ class ChatRequest(BaseModel):
     """Esquema de entrada da mensagem do Streamlit."""
     user_message: str
     chat_history: List[Dict[str, str]] 
+    # Adicionando bot_id opcional (se a rota de grupo precisar)
+    bot_id: Optional[str] = None 
 
 class ChatResponse(BaseModel):
     """Esquema de resposta da rota de chat."""
@@ -122,7 +124,7 @@ def _prepare_hf_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -
 async def _call_hf_api(payload: Dict[str, Any], bot_id: str) -> str:
     """
     Chama a API de Inferência do Hugging Face.
-    Agora usa 'async with' para garantir o correto fechamento da conexão (Fix LocalProtocolError).
+    Usa 'async with httpx.AsyncClient' para garantir o correto fechamento da conexão (Fix LocalProtocolError).
     """
     HF_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta" 
     url = f"{HF_API_BASE_URL}{HF_MODEL_ID}"
@@ -260,11 +262,19 @@ async def import_bots(bot_list_file: BotListFile, db: Session = Depends(get_db))
             continue 
         else:
             db_bot = DBBot(
-                id=bot_data.id, creator_id=bot_data.creator_id, name=bot_data.name, gender=bot_data.gender,
-                introduction=bot_in.introduction, personality=bot_data.personality, 
-                welcome_message=bot_data.welcome_message, avatar_url=bot_data.avatar_url,
-                tags=tags_json, conversation_context=bot_data.conversation_context,
-                context_images=bot_data.context_images, system_prompt=bot_data.system_prompt,
+                id=bot_data.id, 
+                creator_id=bot_data.creator_id, 
+                name=bot_data.name, 
+                gender=bot_data.gender,
+                # CORREÇÃO APLICADA AQUI (usando bot_data.introduction)
+                introduction=bot_data.introduction, 
+                personality=bot_data.personality, 
+                welcome_message=bot_data.welcome_message, 
+                avatar_url=bot_data.avatar_url,
+                tags=tags_json, 
+                conversation_context=bot_data.conversation_context,
+                context_images=bot_data.context_images, 
+                system_prompt=bot_data.system_prompt,
                 ai_config_json=ai_config_json
             )
             db.add(db_bot)
@@ -289,11 +299,8 @@ async def get_task_status(task_id: str):
 @router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
 async def send_group_message(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # NOTA: Assumindo que o ChatRequest deve ter um bot_id para a tarefa de background
-    try:
-         target_bot_id = request.bot_id
-    except AttributeError:
-         # Se não houver bot_id no payload (o que deve ser corrigido), usamos um ID padrão.
-         target_bot_id = "default-bot-for-group-task" 
+    # O bot_id agora é um campo opcional, mas vamos forçar a checagem aqui para o propósito do grupo
+    target_bot_id = request.bot_id if request.bot_id else "default-bot-for-group-task"
 
     if db.query(DBBot).filter(DBBot.id == target_bot_id).first() is None:
         raise HTTPException(status_code=404, detail=f"Bot with ID {target_bot_id} not found in database for group task.")
