@@ -8,7 +8,7 @@ import os
 # --- Configuração Global ---
 
 # Obtém a URL base da API (do ambiente ou usa o padrão local)
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://cringe-8h21.onrender.com")
 BOTS_API_URL = f"{API_BASE_URL}/bots"
 CHAT_API_URL = f"{API_BASE_URL}/bots/chat"
 
@@ -261,3 +261,4 @@ def main_page():
 
 if __name__ == '__main__':
     main_page()
+
