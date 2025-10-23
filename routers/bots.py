@@ -20,9 +20,7 @@ from models import Bot as DBBot
 try:
     import httpx
 except ImportError:
-    # Se httpx não estiver disponível, levantamos um erro.
     raise RuntimeError("A biblioteca 'httpx' é necessária. Instale com: pip install httpx")
-# HTTP_CLIENT global is removed to fix LocalProtocolError
 
 # ----------------------------------------------------------------------
 # Variáveis de Configuração Hugging Face
@@ -75,23 +73,19 @@ class BotListFile(BaseModel):
     bots: List[Bot]
 
 class ChatMessage(BaseModel):
-    role: str # 'user' or 'model'
+    role: str 
     text: str = Field(min_length=1)
     
 class BotChatRequest(BaseModel):
     bot_id: str
     messages: List[ChatMessage] 
     
-# NOVOS SCHEMAS PARA ROTA DE CHAT 1:1
 class ChatRequest(BaseModel):
-    """Esquema de entrada da mensagem do Streamlit."""
     user_message: str
     chat_history: List[Dict[str, str]] 
-    # Adicionando bot_id opcional (se a rota de grupo precisar)
     bot_id: Optional[str] = None 
 
 class ChatResponse(BaseModel):
-    """Esquema de resposta da rota de chat."""
     response: str
 
 # Router
@@ -133,7 +127,7 @@ async def _call_hf_api(payload: Dict[str, Any], bot_id: str) -> str:
     max_retries = 3
     initial_delay = 2 
 
-    # NOVO: Criação do cliente dentro do contexto para garantir a estabilidade da conexão
+    # CORREÇÃO CRÍTICA: Cliente criado dentro do contexto
     async with httpx.AsyncClient(timeout=60.0) as client: 
         for attempt in range(max_retries):
             try:
@@ -188,12 +182,10 @@ async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task
         if not bot_data:
             raise ValueError(f"Bot {bot_id} não encontrado no DB para processamento em background.")
 
-        # Converte o histórico recebido para o formato ChatMessage
         messages = [ChatMessage(role=msg['role'].replace('bot', 'model'), text=msg['content']) 
                     for msg in request_data.get('chat_history', []) 
                     if 'content' in msg]
         
-        # Adiciona a mensagem do usuário (recebida como user_message)
         messages.append(ChatMessage(role="user", text=request_data.get('user_message', '')))
         
         payload = _prepare_hf_payload(bot_data, messages)
@@ -257,7 +249,6 @@ async def import_bots(bot_list_file: BotListFile, db: Session = Depends(get_db))
         tags_json = json.dumps(bot_data.tags)
         ai_config_json = json.dumps(bot_data.ai_config.model_dump())
         
-        # Simplifiquei para apenas criar um novo se não existir (sem atualização complexa)
         if db_bot:
             continue 
         else:
@@ -266,7 +257,7 @@ async def import_bots(bot_list_file: BotListFile, db: Session = Depends(get_db))
                 creator_id=bot_data.creator_id, 
                 name=bot_data.name, 
                 gender=bot_data.gender,
-                # CORREÇÃO APLICADA AQUI (usando bot_data.introduction)
+                # CORREÇÃO DO NameError: Agora usa bot_data
                 introduction=bot_data.introduction, 
                 personality=bot_data.personality, 
                 welcome_message=bot_data.welcome_message, 
@@ -298,8 +289,6 @@ async def get_task_status(task_id: str):
 # Rota de Grupo (Usa Background Task)
 @router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
 async def send_group_message(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # NOTA: Assumindo que o ChatRequest deve ter um bot_id para a tarefa de background
-    # O bot_id agora é um campo opcional, mas vamos forçar a checagem aqui para o propósito do grupo
     target_bot_id = request.bot_id if request.bot_id else "default-bot-for-group-task"
 
     if db.query(DBBot).filter(DBBot.id == target_bot_id).first() is None:
@@ -324,7 +313,6 @@ async def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends
     """
     Rota para o chat em tempo real com um bot (chamada síncrona à IA).
     """
-    # 1. Busca os dados do Bot no DB
     db_bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
     
     if db_bot is None:
@@ -333,29 +321,22 @@ async def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends
     bot_data = db_bot.to_dict()
 
     try:
-        # 2. Converte o histórico e a nova mensagem para o formato ChatMessage
         messages_for_ia = []
         
-        # Adiciona o histórico
         for msg in request.chat_history:
              role = msg.get('role', 'user').replace('bot', 'model') 
              messages_for_ia.append(ChatMessage(role=role, text=msg.get('content', '')))
         
-        # Adiciona a mensagem atual do usuário
         messages_for_ia.append(ChatMessage(role="user", text=request.user_message))
         
-        # 3. Prepara o payload para a API HF
         payload = _prepare_hf_payload(bot_data, messages_for_ia)
 
-        # 4. Chama a API Hugging Face (agora com a correção de protocolo)
+        # Chamada à API com a correção do protocolo
         ai_response_text = await _call_hf_api(payload, bot_id)
 
-        # 5. Retorna a resposta
         return ChatResponse(response=ai_response_text)
         
     except HTTPException:
-        # Repassa o erro de API HF (429, 500, etc.)
         raise
     except Exception as e:
-        # Erro genérico de processamento
         raise HTTPException(status_code=500, detail=f"Erro interno ao processar chat: {e.__class__.__name__}")
