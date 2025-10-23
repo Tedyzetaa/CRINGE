@@ -13,7 +13,7 @@ from typing import List, Dict, Any
 # --- CONFIGURAÇÃO DE AMBIENTE ---
 
 # Obtém a variável de ambiente. O padrão é http://localhost:8000
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://cringe-8h21.onrender.com")
 
 # URL específica para a API Multimodal/Criação (mantemos o override)
 BACKEND_URL_OVERRIDE = "https://cringe-8h21.onrender.com" 
@@ -451,4 +451,5 @@ if st.session_state['page'] == 'chat':
     chat_page()
 else:
     main_view()
+
     show_api_base_url()
