@@ -9,7 +9,7 @@ import time
 # --- Variáveis de Configuração ---
 
 # Tenta carregar a URL base da API (do ambiente ou usa localhost como fallback)
-API_BASE_URL = os.getenv("API_BASE_URL", "https://cringe-8h21.onrender.com")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # --- Funções de API ---
 
@@ -115,8 +115,8 @@ def chat_page(bot_id: str, bot_data: dict):
         # 3. Prepara a requisição para o backend
         history_for_api = [
             {"role": msg["role"], "content": msg["content"]} 
-            for msg in st.session_state.chat_history if msg["role"] != "bot"
-        ] # Exclui a mensagem de boas vindas, se necessário, ou ajusta a lógica de histórico
+            for msg in st.session_state.chat_history
+        ] # Inclui todas as mensagens (bot e user) para contexto
 
         request_payload = {
             "user_message": user_message,
@@ -141,8 +141,7 @@ def chat_page(bot_id: str, bot_data: dict):
         with st.chat_message("assistant"):
             st.write(ai_response)
         
-        # A API é síncrona, então não precisa de rerun, mas em caso de erro, pode ser útil
-        # st.rerun() # Removido para evitar piscar constante.
+        # Não é necessário st.rerun() após a mensagem, pois o chat_input limpa automaticamente.
 
 def create_bot_page():
     st.header("✨ Criar Novo Bot")
@@ -266,7 +265,7 @@ def main_view():
         
     # 2. Sidebar de Navegação
     with st.sidebar:
-        st.title("frontend")
+        st.title("CRINGE RPG-AI Frontend")
         st.divider()
 
         # Seleção de Páginas
@@ -292,7 +291,8 @@ def main_view():
 
     # 3. Renderiza o conteúdo principal
     if st.session_state.current_view == "selection_page":
-        # Chama a API para obter a lista de bots
+        # Invalida o cache antes de buscar, para refletir o estado do DB
+        api_get.clear() 
         bots = api_get("/bots/")
         if bots is not None:
             selection_page(bots)
@@ -320,4 +320,3 @@ def main_view():
 
 if __name__ == "__main__":
     main_view()
-

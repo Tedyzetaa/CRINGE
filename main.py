@@ -11,12 +11,11 @@ import os
 import sys
 
 # NOVO: Importa a função de inicialização/importação do DB
+# ISSO É CRÍTICO PARA O RENDER COM SQLITE
 try:
-    # Assumimos que o arquivo é init_db.py e contém a função initialize_database_with_data
     from init_db import initialize_database_with_data
 except ImportError:
-    # Se o nome do arquivo ou da função for diferente, você deve ajustar aqui.
-    print("AVISO: Módulo 'init_db' ou função 'initialize_database_with_data' não encontrado.")
+    print("AVISO: Módulo 'init_db' não encontrado. Importação automática de bots desabilitada.")
     initialize_database_with_data = None
 
 
@@ -28,30 +27,31 @@ app = FastAPI(
 )
 
 # 2. Cria as tabelas do banco de dados (se não existirem)
-# NOTA: Este bloco sempre deve ser executado para garantir que as tabelas existam
+# Este bloco é executado na inicialização do backend
 print("Criando tabelas no banco de dados...")
 try:
     Base.metadata.create_all(bind=engine)
     print("Tabelas criadas com sucesso.")
 except Exception as e:
     print(f"ERRO CRÍTICO ao criar tabelas: {e}")
-    sys.exit(1) # Sai se não conseguir criar as tabelas
+    sys.exit(1)
 
 
 # 3. IMPORTAÇÃO CRÍTICA PARA RENDER (Garante que os bots existam após o reset do DB)
+# Esta função é chamada DEPOIS que as tabelas são criadas (Passo 2)
 if initialize_database_with_data:
     print("Iniciando importação de bots (necessário devido ao DB volátil do Render)...")
     try:
+        # Chama a função que lê o JSON e insere os bots no DB
         initialize_database_with_data()
         print("Bots iniciais importados com sucesso.")
     except Exception as e:
         print(f"ERRO FATAL ao importar bots iniciais: {e}")
 else:
-    print("Função de inicialização de dados pulada. Verifique se 'init_db.py' está correto.")
+    print("Função de inicialização de dados pulada.")
 
 
 # 4. Configuração de CORS
-# Permite todas as origens temporariamente para facilitar o deploy no Render
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

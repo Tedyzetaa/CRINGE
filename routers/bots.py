@@ -1,47 +1,30 @@
-# routers/bots.py (FINAL E COMPLETO COM CORREÇÕES DE PROTOCOLO E NameError)
-
 import uuid
-import time
-import os
-import asyncio
-import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
-# Importações do SQLAlchemy e da dependência de DB
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, HTTPException, Body, BackgroundTasks, status, Depends
 from pydantic import BaseModel, Field
 
-# IMPORTAÇÕES DO PROJETO 
-from database import get_db
-from models import Bot as DBBot 
+from database import SessionLocal
+from models import Bot as DBBot, AICofig as DBAiConfig # Importa modelos do DB
+# Importa o cliente de AI refatorado
+from services.ai_client import AI_CLIENT 
 
-# Importação de cliente HTTP assíncrono para chamadas externas
-try:
-    import httpx
-except ImportError:
-    raise RuntimeError("A biblioteca 'httpx' é necessária. Instale com: pip install httpx")
+# Cria o roteador FastAPI
+router = APIRouter(
+    prefix="/bots",
+    tags=["bots"],
+)
 
-# ----------------------------------------------------------------------
-# Variáveis de Configuração Hugging Face
-# ----------------------------------------------------------------------
+# --- Schemas Pydantic para Input/Output ---
 
-HF_API_TOKEN = os.getenv("HF_API_TOKEN", "") 
-HF_API_BASE_URL = "https://api-inference.huggingface.co/models/"
+class AIConfigSchema(BaseModel):
+    """Schema para a configuração de IA do bot."""
+    temperature: float = Field(..., description="Criatividade da IA (0.0 a 1.0)")
+    max_output_tokens: int = Field(..., description="Número máximo de tokens de saída")
 
-# Simulação de cache ou banco de dados para armazenar o status da tarefa de background
-TASK_RESULTS_DB: Dict[str, Dict[str, Optional[str]]] = {} 
-
-# ----------------------------------------------------------------------
-# Definições Pydantic (Esquemas de Dados)
-# ----------------------------------------------------------------------
-
-class AIConfig(BaseModel):
-    temperature: float = Field(default=0.7, ge=0.0, le=1.0)
-    max_output_tokens: int = Field(default=512, ge=128, le=4096)
-
-class Bot(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+class BotBase(BaseModel):
+    """Base para criação de bots."""
     creator_id: str
     name: str
     gender: str
@@ -49,294 +32,213 @@ class Bot(BaseModel):
     personality: str
     welcome_message: str
     avatar_url: str
-    tags: List[str]
+    tags: List[str] = Field(default_factory=list)
     conversation_context: str
     context_images: str
     system_prompt: str
-    ai_config: AIConfig
+    ai_config: AIConfigSchema
+
+class BotCreate(BotBase):
+    """Schema para criação de um novo bot."""
+    pass
+
+class BotResponse(BotBase):
+    """Schema de resposta com ID."""
+    id: str
     
-class BotIn(BaseModel):
-    creator_id: str
-    name: str
-    gender: str
-    introduction: str
-    personality: str
-    welcome_message: str
-    avatar_url: str
-    tags: List[str]
-    conversation_context: str
-    context_images: str
-    system_prompt: str
-    ai_config: AIConfig
-
-class BotListFile(BaseModel):
-    bots: List[Bot]
+    class Config:
+        orm_mode = True
 
 class ChatMessage(BaseModel):
-    role: str 
-    text: str = Field(min_length=1)
-    
-class BotChatRequest(BaseModel):
-    bot_id: str
-    messages: List[ChatMessage] 
-    
+    """Schema para uma mensagem no histórico de chat."""
+    role: str = Field(..., description="Função: 'user' ou 'bot'")
+    content: str = Field(..., description="Conteúdo da mensagem")
+
 class ChatRequest(BaseModel):
-    user_message: str
-    chat_history: List[Dict[str, str]] 
-    bot_id: Optional[str] = None 
+    """Schema para a requisição de chat."""
+    user_message: str = Field(..., description="A última mensagem do usuário.")
+    chat_history: List[ChatMessage] = Field(..., description="Histórico completo da conversa.")
 
 class ChatResponse(BaseModel):
+    """Schema para a resposta do chat."""
     response: str
+    model_used: str
 
-# Router
-router = APIRouter(tags=["bots"])
+class BotListFile(BaseModel):
+    """Schema para a importação de lista de bots (PUT /bots/import)"""
+    bots: List[BotResponse]
 
-# ----------------------------------------------------------------------
-# Funções de Serviço Hugging Face
-# ----------------------------------------------------------------------
+# --- Funções de Dependência ---
 
-def _prepare_hf_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -> Dict[str, Any]:
-    full_prompt = f"{bot_data['system_prompt']}\n\n" 
-    for msg in messages:
-        role = "Usuário" if msg.role == "user" else "Assistente"
-        full_prompt += f"{role}: {msg.text}\n"
-    full_prompt += "Assistente: "
-    
-    ai_config = bot_data.get('ai_config', {})
-    
-    payload = {
-        "inputs": full_prompt,
-        "parameters": {
-            "max_new_tokens": ai_config.get('max_output_tokens', 512), 
-            "temperature": ai_config.get('temperature', 0.8),
-            "return_full_text": False, 
-            "do_sample": True
-        }
-    }
-    return payload
-
-async def _call_hf_api(payload: Dict[str, Any], bot_id: str) -> str:
-    """
-    Chama a API de Inferência do Hugging Face.
-    Usa 'async with httpx.AsyncClient' para garantir o correto fechamento da conexão (Fix LocalProtocolError).
-    """
-    HF_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta" 
-    url = f"{HF_API_BASE_URL}{HF_MODEL_ID}"
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}","Content-Type": "application/json"}
-    
-    max_retries = 3
-    initial_delay = 2 
-
-    # CORREÇÃO CRÍTICA: Cliente criado dentro do contexto
-    async with httpx.AsyncClient(timeout=60.0) as client: 
-        for attempt in range(max_retries):
-            try:
-                response = await client.post(url, headers=headers, json=payload)
-                response.raise_for_status() 
-                result = response.json()
-                text = result[0].get('generated_text', '') 
-                if text:
-                    return text.strip() 
-                else:
-                    raise ValueError("Resposta do LLM vazia ou inválida.")
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code in [429, 503] and attempt < max_retries - 1:
-                    delay = initial_delay * (2 ** attempt)
-                    print(f"Tentativa {attempt+1} falhou. Status {e.response.status_code}. Tentando novamente em {delay}s...")
-                    await asyncio.sleep(delay)
-                else:
-                    raise HTTPException(status_code=e.response.status_code, detail=f"Erro na API Hugging Face: {e.response.text}")
-            except (httpx.RequestError, ValueError, asyncio.TimeoutError) as e:
-                if attempt < max_retries - 1:
-                    delay = initial_delay * (2 ** attempt)
-                    print(f"Tentativa {attempt+1} falhou. Erro: {e.__class__.__name__}. Tentando novamente em {delay}s...")
-                    await asyncio.sleep(delay)
-                else:
-                    raise HTTPException(status_code=503, detail=f"A API Hugging Face falhou após várias tentativas (Timeout/Rede/Erro de Dados). Erro: {e.__class__.__name__}")
-
-    return "Falha na comunicação com a IA." 
-
-# ----------------------------------------------------------------------
-# LÓGICA DE BACKGROUND 
-# ----------------------------------------------------------------------
-
-def _get_bot_from_db(db: Session, bot_id: str):
-    """Função síncrona para buscar o bot no DB (necessário para Background Task)."""
-    db_bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
-    if db_bot is None:
-        return None
-    return db_bot.to_dict()
-
-async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task_id: str):
-    """
-    Esta função executa a chamada lenta de IA em segundo plano, incluindo a busca DB.
-    """
-    TASK_RESULTS_DB[task_id] = {"status": "processing", "result": None}  
-    
-    db_generator = get_db()
-    db = next(db_generator) 
-    
+def get_db():
+    """Dependência para obter uma sessão de banco de dados."""
+    db = SessionLocal()
     try:
-        bot_data = _get_bot_from_db(db, bot_id)
-        
-        if not bot_data:
-            raise ValueError(f"Bot {bot_id} não encontrado no DB para processamento em background.")
-
-        messages = [ChatMessage(role=msg['role'].replace('bot', 'model'), text=msg['content']) 
-                    for msg in request_data.get('chat_history', []) 
-                    if 'content' in msg]
-        
-        messages.append(ChatMessage(role="user", text=request_data.get('user_message', '')))
-        
-        payload = _prepare_hf_payload(bot_data, messages)
-
-        ai_response_text = await _call_hf_api(payload, bot_id)
-
-        TASK_RESULTS_DB[task_id]["status"] = "complete"
-        TASK_RESULTS_DB[task_id]["result"] = ai_response_text
-        
-    except Exception as e:
-        error_message = f"❌ ERRO FATAL na tarefa de background: {e.__class__.__name__}: {e}"
-        TASK_RESULTS_DB[task_id]["status"] = "error"
-        TASK_RESULTS_DB[task_id]["result"] = error_message
-        print(error_message)
+        yield db
     finally:
         db.close()
 
-# ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO 
-# ----------------------------------------------------------------------
+# --- Rotas da API ---
 
-@router.post("/bots/", response_model=Bot, status_code=status.HTTP_201_CREATED)
-async def create_bot(bot_in: BotIn, db: Session = Depends(get_db)):
-    bot_id = str(uuid.uuid4())
-    tags_json = json.dumps(bot_in.tags)
-    ai_config_json = json.dumps(bot_in.ai_config.model_dump())
+@router.get("/", response_model=List[BotResponse])
+def get_all_bots(db: Session = Depends(get_db)):
+    """Retorna todos os bots registrados."""
+    bots_db = db.query(DBBot).all()
+    if not bots_db:
+        # Retorna uma lista vazia, mas não um erro 404, pois a lista pode estar vazia
+        return [] 
     
-    db_bot = DBBot(
-        id=bot_id, creator_id=bot_in.creator_id, name=bot_in.name, gender=bot_in.gender,
-        introduction=bot_in.introduction, personality=bot_in.personality, 
-        welcome_message=bot_in.welcome_message, avatar_url=bot_in.avatar_url,
-        tags=tags_json, conversation_context=bot_in.conversation_context,
-        context_images=bot_in.context_images, system_prompt=bot_in.system_prompt,
-        ai_config_json=ai_config_json
-    )
-    db.add(db_bot)
-    db.commit()
-    db.refresh(db_bot)
-    return Bot(**db_bot.to_dict())
-
-@router.get("/bots/", response_model=List[Bot])
-async def read_bots(db: Session = Depends(get_db)):
-    db_bots = db.query(DBBot).all()
-    return [Bot(**db_bot.to_dict()) for db_bot in db_bots]
-
-@router.get("/bots/{bot_id}", response_model=Bot)
-async def read_bot(bot_id: str, db: Session = Depends(get_db)):
-    db_bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
-    
-    if db_bot is None:
-        raise HTTPException(status_code=404, detail="Bot not found")
+    # Mapeia para o schema de resposta, garantindo que o ai_config seja aninhado corretamente
+    response_bots = []
+    for bot in bots_db:
+        bot_dict = bot.__dict__
+        bot_dict['ai_config'] = bot.ai_config.__dict__
+        response_bots.append(BotResponse(**bot_dict))
         
-    return Bot(**db_bot.to_dict())
+    return response_bots
 
-@router.put("/bots/import", response_model=Dict[str, Any])
-async def import_bots(bot_list_file: BotListFile, db: Session = Depends(get_db)):
+@router.get("/{bot_id}", response_model=BotResponse)
+def get_bot(bot_id: str, db: Session = Depends(get_db)):
+    """Retorna um bot pelo ID."""
+    bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
+    
+    # Mapeia para o schema de resposta
+    bot_dict = bot.__dict__
+    bot_dict['ai_config'] = bot.ai_config.__dict__
+    return BotResponse(**bot_dict)
+
+@router.post("/", response_model=BotResponse, status_code=status.HTTP_201_CREATED)
+def create_bot(bot: BotCreate, db: Session = Depends(get_db)):
+    """Cria um novo bot."""
+    
+    # 1. Cria a configuração de IA
+    ai_config_db = DBAiConfig(
+        temperature=bot.ai_config.temperature,
+        max_output_tokens=bot.ai_config.max_output_tokens
+    )
+    
+    # 2. Cria a instância do bot
+    new_bot_id = str(uuid.uuid4())
+    bot_db = DBBot(
+        id=new_bot_id,
+        creator_id=bot.creator_id,
+        name=bot.name,
+        gender=bot.gender,
+        introduction=bot.introduction,
+        personality=bot.personality,
+        welcome_message=bot.welcome_message,
+        avatar_url=bot.avatar_url,
+        tags=bot.tags,
+        conversation_context=bot.conversation_context,
+        context_images=bot.context_images,
+        system_prompt=bot.system_prompt,
+        ai_config=ai_config_db
+    )
+    
+    # 3. Salva no DB
+    db.add(bot_db)
+    db.commit()
+    db.refresh(bot_db)
+    
+    # 4. Retorna a resposta
+    bot_dict = bot_db.__dict__
+    bot_dict['ai_config'] = ai_config_db.__dict__
+    return BotResponse(**bot_dict)
+
+
+@router.put("/import", response_model=Dict[str, Any])
+def import_bots(bot_list: BotListFile, db: Session = Depends(get_db)):
+    """Importa uma lista de bots, limpando a tabela existente (CUIDADO)."""
+    
     imported_count = 0
     
-    for bot_data in bot_list_file.bots:
-        db_bot = db.query(DBBot).filter(DBBot.id == bot_data.id).first()
-        tags_json = json.dumps(bot_data.tags)
-        ai_config_json = json.dumps(bot_data.ai_config.model_dump())
-        
-        if db_bot:
-            continue 
-        else:
-            db_bot = DBBot(
-                id=bot_data.id, 
-                creator_id=bot_data.creator_id, 
-                name=bot_data.name, 
-                gender=bot_data.gender,
-                # CORREÇÃO DO NameError: Agora usa bot_data
-                introduction=bot_data.introduction, 
-                personality=bot_data.personality, 
-                welcome_message=bot_data.welcome_message, 
-                avatar_url=bot_data.avatar_url,
-                tags=tags_json, 
-                conversation_context=bot_data.conversation_context,
-                context_images=bot_data.context_images, 
-                system_prompt=bot_data.system_prompt,
-                ai_config_json=ai_config_json
+    try:
+        # Opção 1: Limpar e Recriar (Mais simples para o Render/SQLite)
+        db.query(DBBot).delete()
+        db.query(DBAiConfig).delete()
+        db.commit()
+
+        for bot_data in bot_list.bots:
+            # 1. Cria a configuração de IA
+            ai_config_db = DBAiConfig(
+                temperature=bot_data.ai_config.temperature,
+                max_output_tokens=bot_data.ai_config.max_output_tokens
             )
-            db.add(db_bot)
-            imported_count += 1
             
-    db.commit()
-    return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
+            # 2. Cria a instância do bot
+            bot_db = DBBot(
+                id=str(uuid.uuid4()), # Sempre gera novo ID na importação para evitar colisões
+                creator_id=bot_data.creator_id,
+                name=bot_data.name,
+                gender=bot_data.gender,
+                introduction=bot_data.introduction,
+                personality=bot_data.personality,
+                welcome_message=bot_data.welcome_message,
+                avatar_url=bot_data.avatar_url,
+                tags=bot_data.tags,
+                conversation_context=bot_data.conversation_context,
+                context_images=bot_data.context_images,
+                system_prompt=bot_data.system_prompt,
+                ai_config=ai_config_db
+            )
+            
+            db.add(bot_db)
+            imported_count += 1
+        
+        db.commit()
+        return {"success": True, "imported_count": imported_count, "message": "Importação concluída com sucesso."}
 
-# Rotas de Health Check e Polling 
-@router.get("/health")
-async def health():
-    ai_status = "ok" if HF_API_TOKEN else "warning (chave HF não definida)"
-    return {"status": "ok", "services": {"database": "ok", "huggingface_api": ai_status}}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro durante a importação: {e}")
 
-@router.get("/tasks/{task_id}", response_model=Dict[str, Optional[str]])
-async def get_task_status(task_id: str):
-    if task_id not in TASK_RESULTS_DB:
-        raise HTTPException(status_code=404, detail="Task ID not found or expired.")
-    return TASK_RESULTS_DB[task_id]
-
-# Rota de Grupo (Usa Background Task)
-@router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
-async def send_group_message(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    target_bot_id = request.bot_id if request.bot_id else "default-bot-for-group-task"
-
-    if db.query(DBBot).filter(DBBot.id == target_bot_id).first() is None:
-        raise HTTPException(status_code=404, detail=f"Bot with ID {target_bot_id} not found in database for group task.")
-
-    task_id = str(uuid.uuid4())
-    
-    background_tasks.add_task(_process_group_message, target_bot_id, request.model_dump(), task_id)
-    
-    return {
-        "task_id": task_id,
-        "status": "Processamento de IA enfileirado em Background.",
-        "message": "Sua solicitação está sendo processada. O frontend fará o polling da tarefa."
-    }
-
-# ----------------------------------------------------------------------
-# ROTA DE CHAT 1:1 (SÍNCRONA)
-# ----------------------------------------------------------------------
 
 @router.post("/chat/{bot_id}", response_model=ChatResponse)
 async def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)):
     """
-    Rota para o chat em tempo real com um bot (chamada síncrona à IA).
+    Processa uma requisição de chat, chama a IA e retorna a resposta.
     """
-    db_bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
     
-    if db_bot is None:
-        raise HTTPException(status_code=404, detail=f"Bot with ID {bot_id} not found.")
-        
-    bot_data = db_bot.to_dict()
+    # 1. Busca o bot no DB
+    bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
 
+    # 2. Monta o contexto da IA
+    system_prompt = bot.system_prompt
+    user_message = request.user_message
+    
+    # O histórico deve incluir a mensagem de boas-vindas do bot, 
+    # pois o frontend a envia no 'chat_history' para manter a persona.
+    chat_history = [msg.dict() for msg in request.chat_history]
+
+    # VILANAGEM DE SEGURANÇA: Limita o histórico de chat para evitar estouro de tokens e custo
+    # Mantém apenas as últimas 8 mensagens (4 pares de user/bot) + a mensagem atual do usuário
+    MAX_MESSAGES_HISTORY = 8
+    if len(chat_history) > MAX_MESSAGES_HISTORY:
+        # Mantém apenas as últimas N-1 mensagens + a mensagem atual do usuário (que é a última)
+        chat_history = chat_history[-MAX_MESSAGES_HISTORY:] 
+
+    # 3. Chama o Serviço de AI
     try:
-        messages_for_ia = []
+        # A nova lógica de chamada e retry está encapsulada no AI_CLIENT
+        ai_response = await AI_CLIENT.generate_response(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            chat_history=chat_history,
+            ai_config={
+                "temperature": bot.ai_config.temperature,
+                "max_output_tokens": bot.ai_config.max_output_tokens
+            }
+        )
         
-        for msg in request.chat_history:
-             role = msg.get('role', 'user').replace('bot', 'model') 
-             messages_for_ia.append(ChatMessage(role=role, text=msg.get('content', '')))
-        
-        messages_for_ia.append(ChatMessage(role="user", text=request.user_message))
-        
-        payload = _prepare_hf_payload(bot_data, messages_for_ia)
+        return ChatResponse(response=ai_response, model_used=AI_CLIENT.model_id)
 
-        # Chamada à API com a correção do protocolo
-        ai_response_text = await _call_hf_api(payload, bot_id)
-
-        return ChatResponse(response=ai_response_text)
-        
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        # Re-lança exceções do cliente AI (400, 429, 503, etc.)
+        raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro interno ao processar chat: {e.__class__.__name__}")
+        # Erros inesperados
+        raise HTTPException(status_code=500, detail=f"Erro interno no processamento do chat: {e}")

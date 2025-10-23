@@ -4,9 +4,18 @@ import os
 import json
 from sqlalchemy.orm import Session
 from database import SessionLocal # Importa a função para criar sessões
-from models import Bot, AICofig # Assumindo que Bot e AIConfig estão em models.py
-
+# Importe seus modelos: Certifique-se de que os nomes Bot e AIConfig estão corretos
+# Se seus modelos estiverem em models.py, a importação deve ser assim:
+try:
+    from models import Bot, AICofig
+except ImportError:
+    # Fallback se a importação falhar (para evitar quebrar o main.py)
+    print("ERRO: Certifique-se de que 'models.py' e as classes 'Bot'/'AICofig' estão disponíveis.")
+    Bot = None
+    AICofig = None
+    
 # Nome do arquivo JSON contendo os dados dos bots para importação
+# (Ajuste este nome se o seu arquivo for outro)
 BOTS_DATA_FILE = "pimenta_import.json" 
 
 def initialize_database_with_data():
@@ -15,8 +24,12 @@ def initialize_database_with_data():
     Esta função é chamada pelo main.py para garantir que os dados existam
     sempre que o servidor é reiniciado no Render (DB volátil).
     """
+    if not Bot or not AICofig:
+        print("❌ Inicialização de dados pulada: Modelos de DB não encontrados.")
+        return
+        
     if not os.path.exists(BOTS_DATA_FILE):
-        print(f"❌ ERRO DE IMPORTAÇÃO: Arquivo de dados '{BOTS_DATA_FILE}' não encontrado.")
+        print(f"❌ ERRO DE IMPORTAÇÃO: Arquivo de dados '{BOTS_DATA_FILE}' não encontrado. Pulando importação.")
         return
 
     # Tenta ler o arquivo JSON
@@ -25,11 +38,12 @@ def initialize_database_with_data():
             data = json.load(f)
         
         bots_to_import = data.get('bots', [])
+        print(f"Lido {len(bots_to_import)} bots do arquivo JSON.")
     except json.JSONDecodeError:
-        print(f"❌ ERRO: O arquivo '{BOTS_DATA_FILE}' não é um JSON válido.")
+        print(f"❌ ERRO: O arquivo '{BOTS_DATA_FILE}' não é um JSON válido. Pulando importação.")
         return
     except Exception as e:
-        print(f"❌ ERRO ao carregar dados: {e}")
+        print(f"❌ ERRO ao carregar dados: {e}. Pulando importação.")
         return
 
     # Inicia uma sessão de DB
@@ -37,28 +51,30 @@ def initialize_database_with_data():
     
     try:
         for bot_data in bots_to_import:
-            # Tenta encontrar o bot pelo ID para evitar duplicação (Embora no Render,
-            # como o DB é limpo, é mais simples recriar)
-            existing_bot = db.query(Bot).filter(Bot.id == bot_data.get("id")).first()
+            
+            # Remove o ID para que o SQLAlchemy trate a chave primária
+            bot_id = bot_data.pop('id', None)
+            
+            # Verifica se o bot já existe pelo nome ou outro campo exclusivo, se necessário.
+            # Como o DB é limpo no Render, focamos na inserção direta.
 
-            if existing_bot:
-                print(f"⚠️ Bot '{bot_data['name']}' já existe. Pulando importação.")
-                continue
-
-            # Cria a configuração de AI (se a estrutura for aninhada)
+            # 1. Extrai e constrói a AI Config
             ai_config_data = bot_data.pop('ai_config', {})
             
-            # Cria a instância do bot
+            # Se a AIConfig for uma relação 1:1, crie a instância.
+            ai_config_instance = AICofig(**ai_config_data)
+
+            # 2. Constrói o objeto Bot
             new_bot = Bot(
-                # Mapeia campos simples
-                **{k: v for k, v in bot_data.items() if k in Bot.__table__.columns},
+                # Mapeia campos simples do JSON para o modelo Bot
+                **{k: v for k, v in bot_data.items() if hasattr(Bot, k)},
                 
-                # Mapeia a AI Config (adapte conforme seu modelo)
-                ai_config=AICofig(**ai_config_data) 
+                # Adiciona a instância de AI Config
+                ai_config=ai_config_instance
             )
             
             db.add(new_bot)
-            print(f"✅ Bot '{new_bot.name}' importado com sucesso.")
+            print(f"✅ Bot '{new_bot.name}' importado com sucesso (ID: {bot_id or 'novo'}).")
 
         # Commita todas as alterações
         db.commit()
@@ -69,9 +85,3 @@ def initialize_database_with_data():
         
     finally:
         db.close()
-
-# Para fins de teste, você pode descomentar esta seção:
-# if __name__ == "__main__":
-#     print("Iniciando inicialização do DB...")
-#     initialize_database_with_data()
-#     print("Finalizado.")
