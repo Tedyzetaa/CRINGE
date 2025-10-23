@@ -1,4 +1,4 @@
-# routers/bots.py (FINAL E COMPLETO COM ROTA DE CHAT 1:1)
+# routers/bots.py (FINAL E COMPLETO COM CORREÇÃO DE CONEXÃO HTTPX)
 
 import uuid
 import time
@@ -7,33 +7,22 @@ import asyncio
 import json
 from typing import List, Dict, Any, Optional
 
-# NOVO: Importações do SQLAlchemy e da dependência de DB
+# Importações do SQLAlchemy e da dependência de DB
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, HTTPException, Body, BackgroundTasks, status, Depends
 from pydantic import BaseModel, Field
 
-# IMPORTAÇÕES DO PROJETO (Certifique-se que models e database estão no mesmo nível)
+# IMPORTAÇÕES DO PROJETO 
 from database import get_db
-from models import Bot as DBBot # Renomeia o modelo DB para evitar conflito com o Pydantic
+from models import Bot as DBBot 
 
 # Importação de cliente HTTP assíncrono para chamadas externas
 try:
     import httpx
 except ImportError:
-    # Se httpx não estiver disponível, usamos um mock
-    # Você deve ter o httpx instalado: pip install httpx
-    class MockAsyncClient:
-        async def post(self, *args, **kwargs):
-            await asyncio.sleep(0.5)
-            raise RuntimeError("httpx não está instalado. Não é possível chamar a API HF.")
-        def __aenter__(self):
-            return self
-        def __aexit__(self, exc_type, exc_val, exc_tb):
-            pass
-    HTTP_CLIENT = MockAsyncClient()
-else:
-    # Use um cliente global (Melhoria: fechar quando a aplicação for encerrada)
-    HTTP_CLIENT = httpx.AsyncClient(timeout=60.0) # Aumentei o timeout para chamadas de IA
+    # Se httpx não estiver disponível, levantamos um erro.
+    raise RuntimeError("A biblioteca 'httpx' é necessária. Instale com: pip install httpx")
+# Removed: HTTP_CLIENT global is removed to fix LocalProtocolError
 
 # ----------------------------------------------------------------------
 # Variáveis de Configuração Hugging Face
@@ -97,7 +86,6 @@ class BotChatRequest(BaseModel):
 class ChatRequest(BaseModel):
     """Esquema de entrada da mensagem do Streamlit."""
     user_message: str
-    # O Streamlit envia o histórico no formato [{'role': 'user/bot', 'content': '...'}]
     chat_history: List[Dict[str, str]] 
 
 class ChatResponse(BaseModel):
@@ -132,6 +120,10 @@ def _prepare_hf_payload(bot_data: Dict[str, Any], messages: List[ChatMessage]) -
     return payload
 
 async def _call_hf_api(payload: Dict[str, Any], bot_id: str) -> str:
+    """
+    Chama a API de Inferência do Hugging Face.
+    Agora usa 'async with' para garantir o correto fechamento da conexão (Fix LocalProtocolError).
+    """
     HF_MODEL_ID = "HuggingFaceH4/zephyr-7b-beta" 
     url = f"{HF_API_BASE_URL}{HF_MODEL_ID}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}","Content-Type": "application/json"}
@@ -139,35 +131,37 @@ async def _call_hf_api(payload: Dict[str, Any], bot_id: str) -> str:
     max_retries = 3
     initial_delay = 2 
 
-    for attempt in range(max_retries):
-        try:
-            response = await HTTP_CLIENT.post(url, headers=headers, json=payload)
-            response.raise_for_status() 
-            result = response.json()
-            text = result[0].get('generated_text', '') 
-            if text:
-                return text.strip() 
-            else:
-                raise ValueError("Resposta do LLM vazia ou inválida.")
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in [429, 503] and attempt < max_retries - 1: # 503: Service Unavailable (API de IA pode estar carregando)
-                delay = initial_delay * (2 ** attempt)
-                print(f"Tentativa {attempt+1} falhou. Status {e.response.status_code}. Tentando novamente em {delay}s...")
-                await asyncio.sleep(delay)
-            else:
-                raise HTTPException(status_code=e.response.status_code, detail=f"Erro na API Hugging Face: {e.response.text}")
-        except (httpx.RequestError, ValueError) as e:
-            if attempt < max_retries - 1:
-                delay = initial_delay * (2 ** attempt)
-                print(f"Tentativa {attempt+1} falhou. Erro: {e.__class__.__name__}. Tentando novamente em {delay}s...")
-                await asyncio.sleep(delay)
-            else:
-                raise HTTPException(status_code=503, detail=f"A API Hugging Face falhou após várias tentativas (Timeout/Rede/Erro de Dados). Erro: {e.__class__.__name__}")
+    # NOVO: Criação do cliente dentro do contexto para garantir a estabilidade da conexão
+    async with httpx.AsyncClient(timeout=60.0) as client: 
+        for attempt in range(max_retries):
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status() 
+                result = response.json()
+                text = result[0].get('generated_text', '') 
+                if text:
+                    return text.strip() 
+                else:
+                    raise ValueError("Resposta do LLM vazia ou inválida.")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code in [429, 503] and attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)
+                    print(f"Tentativa {attempt+1} falhou. Status {e.response.status_code}. Tentando novamente em {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    raise HTTPException(status_code=e.response.status_code, detail=f"Erro na API Hugging Face: {e.response.text}")
+            except (httpx.RequestError, ValueError, asyncio.TimeoutError) as e:
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)
+                    print(f"Tentativa {attempt+1} falhou. Erro: {e.__class__.__name__}. Tentando novamente em {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    raise HTTPException(status_code=503, detail=f"A API Hugging Face falhou após várias tentativas (Timeout/Rede/Erro de Dados). Erro: {e.__class__.__name__}")
 
     return "Falha na comunicação com a IA." 
 
 # ----------------------------------------------------------------------
-# LÓGICA DE BACKGROUND (Mantida)
+# LÓGICA DE BACKGROUND 
 # ----------------------------------------------------------------------
 
 def _get_bot_from_db(db: Session, bot_id: str):
@@ -216,7 +210,7 @@ async def _process_group_message(bot_id: str, request_data: Dict[str, Any], task
         db.close()
 
 # ----------------------------------------------------------------------
-# ROTAS DE GERENCIAMENTO (Mantidas)
+# ROTAS DE GERENCIAMENTO 
 # ----------------------------------------------------------------------
 
 @router.post("/bots/", response_model=Bot, status_code=status.HTTP_201_CREATED)
@@ -263,11 +257,11 @@ async def import_bots(bot_list_file: BotListFile, db: Session = Depends(get_db))
         
         # Simplifiquei para apenas criar um novo se não existir (sem atualização complexa)
         if db_bot:
-            continue # Ignora bots já existentes para manter a simplicidade
+            continue 
         else:
             db_bot = DBBot(
                 id=bot_data.id, creator_id=bot_data.creator_id, name=bot_data.name, gender=bot_data.gender,
-                introduction=bot_data.introduction, personality=bot_data.personality, 
+                introduction=bot_in.introduction, personality=bot_data.personality, 
                 welcome_message=bot_data.welcome_message, avatar_url=bot_data.avatar_url,
                 tags=tags_json, conversation_context=bot_data.conversation_context,
                 context_images=bot_data.context_images, system_prompt=bot_data.system_prompt,
@@ -279,7 +273,7 @@ async def import_bots(bot_list_file: BotListFile, db: Session = Depends(get_db))
     db.commit()
     return {"success": True, "imported_count": imported_count, "message": f"{imported_count} bots imported successfully."}
 
-# Rotas de Health Check e Polling (Mantidas)
+# Rotas de Health Check e Polling 
 @router.get("/health")
 async def health():
     ai_status = "ok" if HF_API_TOKEN else "warning (chave HF não definida)"
@@ -291,41 +285,21 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=404, detail="Task ID not found or expired.")
     return TASK_RESULTS_DB[task_id]
 
-# Rota de Grupo (Mantida com o uso da Background Task)
+# Rota de Grupo (Usa Background Task)
 @router.post("/groups/send_message", status_code=status.HTTP_202_ACCEPTED, response_model=Dict[str, str])
 async def send_group_message(request: ChatRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    bot_id = request.bot_id # Assume que o ChatRequest deve ter um bot_id, mas a sua definição Pydantic não o tem. 
-                            # Se for um grupo, o bot_id deve vir do payload. Vou assumir o bot_id mais simples.
-    # Se esta rota é para GRUPOS, você precisará ajustar o payload para incluir todos os bots do grupo,
-    # mas mantendo o foco no envio para UMA IA de background (a do bot principal)
-    
-    # ATENÇÃO: Se esta rota é para grupos, o schema BotChatRequest/ChatRequest precisa ser revisado.
-    # Usarei a lógica original de background tasks (que foca em um bot_id)
-    
-    # Simplificando a verificação de bot_id para usar o que foi passado no payload (que deve ser o bot principal)
-    # Por enquanto, assumimos que o request ChatRequest deveria ter um bot_id, mas o código original não mostra.
-    # Vamos usar o bot_id de um bot padrão se não estiver no payload, para evitar erro 500
-    
-    # Se você está usando BotChatRequest, ele tem bot_id. Se está usando ChatRequest, não tem.
-    # Assumindo que o ChatRequest da sua rota de grupo é o que você pretendia usar, mas com `bot_id`
-    # Vou forçar o uso de um bot_id conhecido para evitar que a API caia, mas você deve CORRIGIR o schema
-    
-    # Para o propósito da correção, vou usar o bot ID do seu histórico (Pimenta) se não for fornecido.
-    # ATENÇÃO: Recomendo renomear `ChatRequest` para algo mais específico para evitar confusão.
-    
-    # NOVO: Para evitar o erro 500 devido ao bot_id ausente no schema (se request for ChatRequest),
-    # mas mantendo a funcionalidade de background tasks para a rota de grupos.
+    # NOTA: Assumindo que o ChatRequest deve ter um bot_id para a tarefa de background
     try:
          target_bot_id = request.bot_id
     except AttributeError:
-         target_bot_id = "default-bot-for-group-task" # Substitua por um ID válido ou corrija o schema.
+         # Se não houver bot_id no payload (o que deve ser corrigido), usamos um ID padrão.
+         target_bot_id = "default-bot-for-group-task" 
 
     if db.query(DBBot).filter(DBBot.id == target_bot_id).first() is None:
         raise HTTPException(status_code=404, detail=f"Bot with ID {target_bot_id} not found in database for group task.")
 
     task_id = str(uuid.uuid4())
     
-    # O request.model_dump() deve conter 'user_message' e 'chat_history'
     background_tasks.add_task(_process_group_message, target_bot_id, request.model_dump(), task_id)
     
     return {
@@ -335,14 +309,13 @@ async def send_group_message(request: ChatRequest, background_tasks: BackgroundT
     }
 
 # ----------------------------------------------------------------------
-# ROTA QUE FALTAVA: CHAT 1:1 (SÍNCRONA)
+# ROTA DE CHAT 1:1 (SÍNCRONA)
 # ----------------------------------------------------------------------
 
 @router.post("/chat/{bot_id}", response_model=ChatResponse)
 async def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)):
     """
     Rota para o chat em tempo real com um bot (chamada síncrona à IA).
-    O frontend espera um objeto JSON com a chave 'response'.
     """
     # 1. Busca os dados do Bot no DB
     db_bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
@@ -356,9 +329,8 @@ async def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends
         # 2. Converte o histórico e a nova mensagem para o formato ChatMessage
         messages_for_ia = []
         
-        # Adiciona o histórico (do Streamlit: [{'role': 'user/bot', 'content': '...'}])
+        # Adiciona o histórico
         for msg in request.chat_history:
-             # O seu backend usa 'model', o Streamlit pode usar 'bot'. Mapeamos para 'model'.
              role = msg.get('role', 'user').replace('bot', 'model') 
              messages_for_ia.append(ChatMessage(role=role, text=msg.get('content', '')))
         
@@ -368,10 +340,10 @@ async def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends
         # 3. Prepara o payload para a API HF
         payload = _prepare_hf_payload(bot_data, messages_for_ia)
 
-        # 4. Chama a API Hugging Face
+        # 4. Chama a API Hugging Face (agora com a correção de protocolo)
         ai_response_text = await _call_hf_api(payload, bot_id)
 
-        # 5. Retorna a resposta no formato que o Streamlit espera
+        # 5. Retorna a resposta
         return ChatResponse(response=ai_response_text)
         
     except HTTPException:
