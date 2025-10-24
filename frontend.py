@@ -1,264 +1,96 @@
-import streamlit as st
-import requests
+# routers/bots.py
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
+from typing import List
 import json
-import time
-from typing import Optional, List, Dict, Any
 import os
 
-# --- Configuração Global ---
-
-# Obtém a URL base da API (do ambiente ou usa o padrão local)
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://cringe-8h21.onrender.com")
-BOTS_API_URL = f"{API_BASE_URL}/bots"
-CHAT_API_URL = f"{API_BASE_URL}/bots/chat"
-
-# Configuração da página Streamlit
-st.set_page_config(
-    page_title="CRINGE RPG-AI: V2.3 - Plataforma",
-    layout="centered",
-    initial_sidebar_state="expanded",
+# Supondo que você tenha um arquivo db.py com get_db
+try:
+    from ..database import get_db
+    from ..models import Bot # Importa o modelo Bot
+    from ..schemas import BotBase, BotDisplay, ChatRequest, ChatResponse # Supondo que existam esses Schemas
+    from ..services.ai_service import AIService # Serviço de IA
+except ImportError as e:
+    # Apenas para garantir que os imports funcionem no ambiente de execução
+    print(f"Erro de importação no routers/bots.py: {e}")
+    
+router = APIRouter(
+    prefix="/bots",
+    tags=["Bots"],
 )
 
-# Definir estados de sessão iniciais
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = 'selection'
-if 'selected_bot' not in st.session_state:
-    st.session_state.selected_bot = None
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'available_bots' not in st.session_state:
-    st.session_state.available_bots = []
-if 'bots_loaded' not in st.session_state:
-    st.session_state.bots_loaded = False
+# Inicializa o serviço de IA.
+# A chave Hugging Face deve ser lida da variável de ambiente no serviço
+ai_service = AIService()
 
+# --- Rotas de Bots (GET /bots) ---
 
-# --- Funções de API ---
-
-@st.cache_data(ttl=300)
-def fetch_bots() -> List[Dict[str, Any]]:
-    """Busca a lista de bots da API de backend."""
-    try:
-        st.info(f"Tentando conectar em: {BOTS_API_URL}")
-        response = requests.get(BOTS_API_URL, timeout=10)
-        response.raise_for_status()  # Levanta erro para status 4xx/5xx
-        bots_data = response.json()
-        st.session_state.bots_loaded = True
-        return bots_data
-    except requests.exceptions.RequestException as e:
-        st.error(f"Nenhum bot encontrado ou a API não está acessível. Verifique o backend. Erro: {e}")
-        st.session_state.bots_loaded = True
-        return []
-
-def send_chat_message(bot_id: str, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
-    """Envia a mensagem do usuário e o histórico para a API de chat."""
-    try:
-        payload = {
-            "user_message": user_message,
-            "chat_history": history
-        }
-        
-        url = f"{CHAT_API_URL}/{bot_id}"
-        
-        with st.spinner("O Bot está pensando..."):
-            response = requests.post(url, json=payload, timeout=60)
-            response.raise_for_status()
-            return response.json().get("ai_response")
-            
-    except requests.exceptions.HTTPError as e:
-        st.error(f"ERRO DE BACKEND: {e.response.status_code} - {e.response.reason}")
-        return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"ERRO DE BACKEND: A chamada à API falhou. Erro: {e}")
-        return None
-
-
-# --- Funções de Navegação e Estado ---
-
-def set_page(page_name: str, bot_data: Optional[Dict[str, Any]] = None):
-    """Muda a página atual e o bot selecionado."""
-    st.session_state.current_page = page_name
-    if bot_data:
-        st.session_state.selected_bot = bot_data
-        st.session_state.chat_history = []  # Limpa o histórico ao iniciar novo chat
-    else:
-        st.session_state.selected_bot = None
+@router.get("/", response_model=List[BotDisplay])
+def list_bots(db: Session = Depends(get_db)):
+    """Lista todos os bots disponíveis no banco de dados."""
+    bots = db.query(Bot).all()
     
-    # CORRIGIDO: Substitui st.experimental_rerun() por st.rerun()
-    st.rerun()
-
-def load_bots_and_check():
-    """Carrega os bots e atualiza o estado da sessão."""
-    if not st.session_state.bots_loaded:
-        bots = fetch_bots()
-        st.session_state.available_bots = bots
-        # O estado bots_loaded é definido dentro de fetch_bots()
-
-
-# --- Views da Aplicação ---
-
-def chat_page():
-    """Página de conversação com o bot selecionado."""
-    bot = st.session_state.selected_bot
-    if not bot:
-        st.error("Nenhum bot selecionado. Voltando para a seleção.")
-        set_page('selection')
-        return
-
-    st.header(f"💬 Conversando com {bot['name']} ({bot['gender'] if bot['gender'] else 'Bot'})")
-    st.markdown(f"**Personalidade:** {bot.get('personality', 'Sem descrição de personalidade.')}")
-
-    # Botão Voltar
-    if st.button("⬅️ Voltar para a Seleção de Bots"):
-        set_page('selection')
-        return
-
-    # Mensagem de Boas-Vindas (se o histórico estiver vazio)
-    if not st.session_state.chat_history:
-        welcome_message = bot.get('welcome_message', "Olá! Como posso ajudar você hoje?")
-        st.session_state.chat_history.append({"role": "assistant", "content": welcome_message})
-
-    # Exibir histórico de chat
-    for message in st.session_state.chat_history:
-        role = message["role"]
-        content = message["content"]
-        
-        # O Streamlit usa 'user' e 'assistant' para formatar
-        with st.chat_message(role):
-            st.write(content)
-
-    # Caixa de entrada de chat
-    user_input = st.chat_input(f"Fale com {bot['name']}...")
-
-    if user_input:
-        # 1. Adiciona a mensagem do usuário ao histórico
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        
-        # 2. Exibe a mensagem do usuário
-        with st.chat_message("user"):
-            st.write(user_input)
-
-        # 3. Prepara o histórico para a API (limitando os campos necessários)
-        history_for_api = [
-            {"role": msg["role"], "content": msg["content"]} 
-            for msg in st.session_state.chat_history 
-            if msg["role"] != "user" or msg["content"] != user_input # Exclui a mensagem atual do histórico para a API
-        ]
-        
-        # 4. Chama a API
-        ai_response = send_chat_message(
-            bot_id=bot['id'], 
-            user_message=user_input, 
-            history=history_for_api
-        )
-
-        # 5. Adiciona e exibe a resposta da AI
-        if ai_response:
-            st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
-            with st.chat_message("assistant"):
-                st.write(ai_response)
-        
-        # Após a resposta, força um novo rerun para exibir o estado atualizado
-        # Não é estritamente necessário se o st.chat_input for a última coisa, 
-        # mas garante a atualização visual
-        # CORRIGIDO: Substitui st.experimental_rerun() por st.rerun()
-        st.rerun()
-
-
-def selection_page():
-    """Página de seleção de bots."""
-    st.title("© CringeBot - Seleção de Bots")
-    
-    # Carrega os bots na primeira execução
-    load_bots_and_check()
-
-    bots = st.session_state.available_bots
-
-    if not bots:
-        st.warning("Carregando bots ou falha na conexão. Verifique o status da API.")
-        return
-
-    st.subheader("Bots Existentes")
-    
+    # Mapeia para o schema de display, desserializando as configs de AI e tags
+    result = []
     for bot in bots:
-        with st.container(border=True):
-            col1, col2 = st.columns([1, 4])
+        # 1. Desserializa ai_config_json de volta para um dict
+        try:
+            ai_config = json.loads(bot.ai_config_json)
+        except (json.JSONDecodeError, TypeError):
+            ai_config = {}
             
-            # Avatar
-            with col1:
-                if bot.get('avatar_url'):
-                    # O Streamlit não tem um bom tratamento de erro para imagens, 
-                    # então usamos um fallback simples (Nota: a imagem de erro no seu print 
-                    # é um problema do seu URL, não do código)
-                    st.image(
-                        bot['avatar_url'], 
-                        width=100, 
-                        caption="Avatar",
-                        use_column_width="always"
-                    )
-                else:
-                    st.image("https://placehold.co/100x100/31333f/FFFFFF?text=BOT", width=100)
-            
-            # Dados do Bot
-            with col2:
-                st.subheader(f"{bot['name']} ({bot.get('gender', 'Bot')})")
-                st.caption(f"ID: {bot['id']}")
-                st.markdown(f"**Personalidade:** {bot.get('personality', 'N/A')}")
-                
-                # Botão Conversar
-                if st.button(f"Conversar com {bot['name']} ({bot.get('gender', 'Bot')})", key=f"chat_{bot['id']}"):
-                    set_page('chat', bot)
+        # 2. Desserializa tags de volta para uma lista
+        try:
+            tags = json.loads(bot.tags)
+        except (json.JSONDecodeError, TypeError):
+            tags = []
+        
+        # 3. Cria o objeto para o schema de resposta
+        bot_data = {
+            "id": bot.id,
+            "name": bot.name,
+            "gender": bot.gender,
+            "avatar_url": bot.avatar_url,
+            "personality": bot.personality,
+            "welcome_message": bot.welcome_message,
+            "tags": tags, # Incluído de volta como lista
+            # Ai_config não é necessário no display, mas mantemos para referência
+        }
+        result.append(BotDisplay(**bot_data))
+        
+    return result
 
+# --- Rotas de Chat (POST /bots/chat/{bot_id}) ---
 
-def create_bot_page():
-    """Página para criar um novo bot."""
-    st.header("✨ Criar Novo Bot")
-    st.info("Preencha as informações do bot. Ao salvar, o bot será persistido no DB e poderá ser exportado.")
+@router.post("/chat/{bot_id}", response_model=ChatResponse)
+def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)):
+    """Envia uma mensagem para o bot e recebe a resposta da IA."""
     
-    # Implementação de criação de bot aqui...
-    # Por enquanto, apenas um placeholder:
-    st.warning("Funcionalidade de Criação de Bot não implementada nesta versão. Por favor, importe via JSON.")
+    # 1. Busca o Bot no DB
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail=f"Bot com ID '{bot_id}' não encontrado.")
     
-    if st.button("⬅️ Voltar para a Seleção de Bots"):
-        set_page('selection')
+    # 2. Desserializa a configuração de IA
+    try:
+        ai_config = json.loads(bot.ai_config_json)
+    except (json.JSONDecodeError, TypeError):
+        ai_config = {}
 
-# --- Layout Principal ---
-
-def main_page():
-    """Função principal que renderiza o layout e o conteúdo da página."""
+    # 3. Chama o serviço de IA
+    try:
+        ai_response = ai_service.generate_response(
+            bot_data=bot,
+            ai_config=ai_config,
+            user_message=request.user_message,
+            chat_history=request.chat_history
+        )
+        
+        return ChatResponse(ai_response=ai_response)
     
-    # Barra Lateral
-    with st.sidebar:
-        st.subheader("Menu Principal")
-        if st.session_state.current_page == 'selection':
-            # st.experimental_rerun() para garantir que os bots sejam recarregados se a conexão falhar
-            # CORRIGIDO: Substitui st.experimental_rerun() por st.rerun()
-            if st.button("🔄 Recarregar Bots"):
-                st.cache_data.clear() # Limpa o cache para forçar a busca
-                st.session_state.bots_loaded = False
-                st.rerun()
-
-        if st.button("🏠 Seleção de Bots", key="nav_selection"):
-            set_page('selection')
-        if st.button("✨ Criar Bot", key="nav_create_bot"):
-            set_page('create_bot')
-        if st.button("📦 Importar Bots (DB)", key="nav_import_bot"):
-            # Esta função provavelmente leva à função create_bot ou a uma nova página
-            st.warning("Função Importar não implementada.")
-            
-        st.markdown("---")
-        st.subheader("API BASE URL:")
-        st.code(API_BASE_URL)
-        st.markdown("_Altere a variável de ambiente_ `API_BASE_URL` _para mudar este endereço._")
-
-
-    # Conteúdo Principal
-    if st.session_state.current_page == 'selection':
-        selection_page()
-    elif st.session_state.current_page == 'chat':
-        chat_page()
-    elif st.session_state.current_page == 'create_bot':
-        create_bot_page()
-
-if __name__ == '__main__':
-    main_page()
-
+    except Exception as e:
+        # Captura qualquer erro do serviço de IA (como Timeout/ProtocolError do Hugging Face)
+        error_detail = f"A API Hugging Face falhou após várias tentativas (Timeout/Rede/Erro de Dados). Erro: {e}"
+        print(f"ERRO DE CHAT: {error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
