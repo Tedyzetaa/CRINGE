@@ -10,7 +10,7 @@ import os
 # Obtém a URL base da API (do ambiente ou usa o padrão local)
 # Vamos usar uma chave de sessão para armazenar a URL base de forma dinâmica
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "http://localhost:8000")
+    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "https://cringe-8h21.onrender.com")
 
 # As URLs da API são construídas com base no estado da sessão
 BOTS_API_URL = f"{st.session_state.api_base_url}/bots"
@@ -285,3 +285,4 @@ def main_page():
 
 if __name__ == '__main__':
     main_page()
+
