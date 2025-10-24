@@ -1,129 +1,96 @@
 # routers/bots.py
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List
+import json
 import os
 
-# CORRIGIDO: Removida a importação de AIConfig. Usamos apenas Bot.
-from models import Bot as DBBot
-from database import get_db
-from services.ai_client import AIClient 
-
-# O modelo padrão deve ser o mesmo usado na lógica de fallback do models.py
-# Usando um modelo da Google para o fallback, já que o anterior era HuggingFace
-DEFAULT_MODEL_ID = "gemini-2.5-flash" 
-AI_CLIENT = AIClient(model_id=DEFAULT_MODEL_ID)
-
+# Supondo que você tenha um arquivo db.py com get_db
+try:
+    from ..database import get_db
+    from ..models import Bot # Importa o modelo Bot
+    from ..schemas import BotBase, BotDisplay, ChatRequest, ChatResponse # Supondo que existam esses Schemas
+    from ..services.ai_service import AIService # Serviço de IA
+except ImportError as e:
+    # Apenas para garantir que os imports funcionem no ambiente de execução
+    print(f"Erro de importação no routers/bots.py: {e}")
+    
 router = APIRouter(
     prefix="/bots",
-    tags=["bots"],
+    tags=["Bots"],
 )
 
-# --- Schemas Pydantic ---
+# Inicializa o serviço de IA.
+# A chave Hugging Face deve ser lida da variável de ambiente no serviço
+ai_service = AIService()
 
-class ChatMessage(BaseModel):
-    role: str = Field(..., description="O papel da mensagem (user ou assistant).")
-    content: str = Field(..., description="O conteúdo da mensagem.")
+# --- Rotas de Bots (GET /bots) ---
 
-class ChatRequest(BaseModel):
-    user_message: str = Field(..., description="A nova mensagem do usuário.")
-    # Corrigida a descrição para ser mais clara sobre o histórico
-    chat_history: List[ChatMessage] = Field([], description="O histórico completo de mensagens ANTERIORES.") 
-
-# REMOVIDO: AIConfigSchema não é mais necessário, pois BotSchema usa Dict[str, Any]
-# para o campo ai_config, permitindo mais flexibilidade na leitura do JSON do DB.
-
-class BotSchema(BaseModel):
-    """
-    Schema que reflete o formato de saída do método to_dict() do modelo Bot.
-    """
-    id: str
-    name: str
-    creator_id: str
-    gender: Optional[str] = None
-    introduction: Optional[str] = None
-    personality: Optional[str] = None # Campo essencial para o prompt do chat
-    welcome_message: Optional[str] = None
-    avatar_url: Optional[str] = None
-    tags: List[str]
-    conversation_context: Optional[str] = None
-    context_images: Optional[str] = None
-    system_prompt: Optional[str] = None
-    
-    # O campo ai_config agora é um Dict[str, Any], espelhando bot.get_ai_config()
-    ai_config: Dict[str, Any]
-
-    class Config:
-        # Corrigido: orm_mode está obsoleto, use from_attributes
-        from_attributes = True
-
-# --- Funções de Ajuda ---
-
-def get_bot_by_id(db: Session, bot_id: str) -> DBBot: # ID deve ser str
-    """Busca o bot e garante que o ID seja tratado como string (UUID)."""
-    # Corrigido: O Bot ID no DB agora é String (UUID) conforme models.py
-    bot = db.query(DBBot).filter(DBBot.id == bot_id).first()
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot não encontrado.")
-    return bot
-
-# --- Rotas da API ---
-
-@router.get("/", response_model=List[BotSchema])
+@router.get("/", response_model=List[BotDisplay])
 def list_bots(db: Session = Depends(get_db)):
-    # Usamos o to_dict() para garantir que a saída seja compatível com BotSchema
-    bots = db.query(DBBot).all()
-    # Retorna a lista de dicionários, pois o BotSchema usa from_attributes
-    return [bot.to_dict() for bot in bots]
-
-@router.get("/{bot_id}", response_model=BotSchema)
-def get_bot(bot_id: str, db: Session = Depends(get_db)): # ID deve ser str
-    bot = get_bot_by_id(db, bot_id)
-    # Usamos o to_dict() para garantir que a saída seja compatível com BotSchema
-    return bot.to_dict() 
-
-@router.post("/chat/{bot_id}")
-def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)) -> Dict[str, str]: # ID deve ser str
-    """
-    Envia uma mensagem ao bot, gera a resposta da AI e retorna a resposta.
-    """
-    bot = get_bot_by_id(db, bot_id)
+    """Lista todos os bots disponíveis no banco de dados."""
+    bots = db.query(Bot).all()
     
-    # 1. Extrai as configurações de AI e o prompt do Bot
-    ai_config = bot.get_ai_config()
-    
-    # O system_prompt é usado diretamente, pois agora está armazenado como um campo no Bot
-    # Se o system_prompt do DB for None, usamos um fallback CLARO
-    system_prompt = bot.system_prompt
-    if not system_prompt:
-        system_prompt = f"Você é o bot '{bot.name}'. Sua personalidade é: '{bot.personality}'. Responda de forma útil, envolvente e estritamente de acordo com sua personalidade."
+    # Mapeia para o schema de display, desserializando as configs de AI e tags
+    result = []
+    for bot in bots:
+        # 1. Desserializa ai_config_json de volta para um dict
+        try:
+            ai_config = json.loads(bot.ai_config_json)
+        except (json.JSONDecodeError, TypeError):
+            ai_config = {}
+            
+        # 2. Desserializa tags de volta para uma lista
+        try:
+            tags = json.loads(bot.tags)
+        except (json.JSONDecodeError, TypeError):
+            tags = []
+        
+        # 3. Cria o objeto para o schema de resposta
+        bot_data = {
+            "id": bot.id,
+            "name": bot.name,
+            "gender": bot.gender,
+            "avatar_url": bot.avatar_url,
+            "personality": bot.personality,
+            "welcome_message": bot.welcome_message,
+            "tags": tags, # Incluído de volta como lista
+            # Ai_config não é necessário no display, mas mantemos para referência
+        }
+        result.append(BotDisplay(**bot_data))
+        
+    return result
 
-    MAX_HISTORY_MESSAGES = 10 
-    history_for_api = [msg.dict() for msg in request.chat_history]
-    
-    if len(history_for_api) > MAX_HISTORY_MESSAGES:
-         history_for_api = history_for_api[-MAX_HISTORY_MESSAGES:]
+# --- Rotas de Chat (POST /bots/chat/{bot_id}) ---
 
+@router.post("/chat/{bot_id}", response_model=ChatResponse)
+def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)):
+    """Envia uma mensagem para o bot e recebe a resposta da IA."""
+    
+    # 1. Busca o Bot no DB
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail=f"Bot com ID '{bot_id}' não encontrado.")
+    
+    # 2. Desserializa a configuração de IA
     try:
-        # 2. Gera a resposta usando o serviço dedicado
-        ai_response = AI_CLIENT.generate_response(
-            system_prompt=system_prompt,
-            chat_history=history_for_api,
+        ai_config = json.loads(bot.ai_config_json)
+    except (json.JSONDecodeError, TypeError):
+        ai_config = {}
+
+    # 3. Chama o serviço de IA
+    try:
+        ai_response = ai_service.generate_response(
+            bot_data=bot,
+            ai_config=ai_config,
             user_message=request.user_message,
-            # Passando as configs dinamicamente do JSON
-            model_id=ai_config.get("model_id", DEFAULT_MODEL_ID), 
-            temperature=ai_config.get("temperature", 0.7), 
-            max_output_tokens=ai_config.get("max_output_tokens", 512)
+            chat_history=request.chat_history
         )
         
-        return {"ai_response": ai_response}
-
+        return ChatResponse(ai_response=ai_response)
+    
     except Exception as e:
-        print(f"ERRO CRÍTICO no chat para Bot {bot_id}: {e}")
-        # Melhorei a mensagem de erro para o usuário final
-        raise HTTPException(
-            status_code=500, 
-            detail="Ocorreu um erro ao gerar a resposta da AI. Verifique as configurações do modelo ou a chave da API."
-        )
+        # Captura qualquer erro do serviço de IA (como Timeout/ProtocolError do Hugging Face)
+        error_detail = f"A API Hugging Face falhou após várias tentativas (Timeout/Rede/Erro de Dados). Erro: {e}"
+        print(f"ERRO DE CHAT: {error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
