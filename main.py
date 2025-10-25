@@ -7,6 +7,7 @@ import json
 import uuid
 from typing import List, Optional
 import os
+from ai_service import AIService  # Importar o serviço de IA
 
 app = FastAPI(title="CRINGE API", version="2.0.0")
 
@@ -18,6 +19,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Inicializar serviço de IA
+ai_service = AIService()
 
 # Models
 class BotCreate(BaseModel):
@@ -467,7 +471,7 @@ async def delete_bot(bot_id: str):
 
 @app.post("/bots/chat/{bot_id}")
 async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
-    """Chat com um bot específico"""
+    """Chat com um bot específico usando IA real"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -499,9 +503,37 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
             (user_message_id, conversation_id, chat_request.message, True)
         )
         
-        # Simular resposta do bot (substituir por integração com IA real)
-        bot_name = bot_dict['name']
-        ai_response = f"🤖 [{bot_name}]: Recebi sua mensagem: '{chat_request.message}'. Esta é uma resposta simulada. Configure um serviço de IA para respostas reais."
+        # Buscar histórico de mensagens para esta conversa
+        cursor.execute('''
+            SELECT content, is_user FROM messages 
+            WHERE conversation_id = ? 
+            ORDER BY created_at ASC
+        ''', (conversation_id,))
+        messages = cursor.fetchall()
+        
+        # Preparar histórico para a IA
+        chat_history = []
+        for msg in messages:
+            role = "user" if msg['is_user'] else "assistant"
+            chat_history.append({
+                "role": role,
+                "content": msg['content']
+            })
+        
+        # Gerar resposta usando IA REAL
+        try:
+            print(f"🤖 Gerando resposta para {bot_dict['name']}...")
+            ai_response = ai_service.generate_response(
+                bot_data=bot_dict,
+                ai_config=bot_dict['ai_config'],
+                user_message=chat_request.message,
+                chat_history=chat_history
+            )
+            print(f"✅ Resposta gerada: {ai_response[:100]}...")
+        except Exception as e:
+            print(f"❌ Erro no serviço de IA: {str(e)}")
+            # Fallback para resposta simulada se a IA falhar
+            ai_response = f"🤖 [{bot_dict['name']}]: Desculpe, estou tendo problemas para processar sua mensagem no momento. Tente novamente mais tarde. (Erro: {str(e)})"
         
         # Salvar resposta do bot
         bot_message_id = str(uuid.uuid4())
@@ -517,7 +549,7 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
             "response": ai_response,
             "conversation_id": conversation_id,
             "bot_id": bot_id,
-            "bot_name": bot_name
+            "bot_name": bot_dict['name']
         }
         
     except HTTPException:
