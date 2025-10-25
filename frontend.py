@@ -59,18 +59,28 @@ def delete_bot(bot_id: str):
 
 def chat_with_bot(bot_id: str, message: str, conversation_id: Optional[str] = None):
     """Envia mensagem para um bot"""
+    print(f"🔍 FRONTEND DEBUG: Enviando mensagem para bot {bot_id}")
+    print(f"🔍 FRONTEND DEBUG: Mensagem: {message}")
+    print(f"🔍 FRONTEND DEBUG: Conversation ID: {conversation_id}")
+    
     try:
         payload = {
             "message": message,
             "conversation_id": conversation_id
         }
+        print(f"🔍 FRONTEND DEBUG: Payload: {payload}")
+        
         response = requests.post(f"{API_URL}/bots/chat/{bot_id}", json=payload, timeout=30)
+        print(f"🔍 FRONTEND DEBUG: Response status: {response.status_code}")
+        
         if response.status_code == 200:
             return response.json()
         else:
+            print(f"❌ FRONTEND DEBUG: Erro na resposta: {response.status_code} - {response.text}")
             st.error(f"Erro ao enviar mensagem: {response.status_code}")
             return None
     except Exception as e:
+        print(f"❌ FRONTEND DEBUG: Exceção: {e}")
         st.error(f"Erro de conexão: {str(e)}")
         return None
 
@@ -98,6 +108,10 @@ def show_chat_interface():
         return
     
     bot = st.session_state.current_bot
+    
+    # Debug info
+    st.write(f"🔍 DEBUG Frontend - API URL: {API_URL}")
+    st.write(f"🔍 DEBUG Frontend - Bot ID: {bot['id']}")
     
     # Header do chat
     col1, col2, col3 = st.columns([3, 1, 1])
@@ -170,6 +184,8 @@ def show_chat_interface():
                 })
                 
                 st.rerun()
+            else:
+                st.error("❌ Não foi possível obter resposta do bot")
 
 def show_bots_list():
     """Página de listagem de bots"""
