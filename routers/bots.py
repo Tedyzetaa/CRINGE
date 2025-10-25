@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 import json
 import uuid
 import logging
+import random
 
 # Importações absolutas
 from database import get_db
@@ -65,7 +66,7 @@ def list_bots(db: Session = Depends(get_db)):
 
 @router.post("/chat/{bot_id}", response_model=ChatResponse)
 def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)):
-    """Chat com bot usando OpenRouter"""
+    """Chat com bot usando OpenRouter com prevenção de loop"""
     if not ai_service:
         logger.error("❌ Serviço de IA não disponível")
         raise HTTPException(status_code=500, detail="Serviço de IA não disponível")
@@ -99,9 +100,9 @@ def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_d
         ai_config = {"temperature": 0.7, "max_output_tokens": 400}
 
     try:
-        logger.info(f"🤖 Gerando resposta para mensagem: {request.user_message[:50]}...")
+        logger.info(f"🤖 Gerando resposta para: {request.user_message[:50]}...")
         
-        # Usar o método to_dict do model para garantir compatibilidade
+        # Usar o método to_dict do model
         bot_dict = bot.to_dict()
         
         ai_response = ai_service.generate_response(
@@ -111,13 +112,61 @@ def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_d
             chat_history=request.chat_history
         )
         
+        # 🔥 PREVENÇÃO DE LOOP: Se a resposta for erro, usar fallback criativo
+        if any(keyword in ai_response.lower() for keyword in ['❌', 'erro', 'dificuldade', 'problema', 'falha', 'todos os modelos']):
+            logger.warning("⚠️ Usando fallback criativo devido a erro na IA")
+            
+            # Fallbacks específicos para cada bot baseados na personalidade
+            fallback_responses = {
+                "Pimenta (Pip)": [
+                    "💫 *Meus olhos piscam em cores confusas* Chocalho, chocalho! Minhas engrenagens mágicas estão um pouco enferrujadas hoje! Mas eu sinto sua energia - quer um chá de risos enlatados enquanto me reorganizo?",
+                    "🎪 *Fazendo malabarismos com estrelas invisíveis* Opa! Parece que minhas palavras fugiram para o País das Maravilhas! Enquanto busco elas, me conte um segredo seu!",
+                    "✨ *Meu vestido vira um redemoinho de cores* Professor Cartola está resmungando sobre 'sinais cósmicos instáveis'! Ignore ele! O que sua alma está sussurrando hoje?"
+                ],
+                "Zimbrak": [
+                    "⚙️ *Minhas engrenagens oculares giram lentamente* Parece que uma emoção desalinhada está afetando meus circuitos. Enquanto recalibro, conte-me sobre os mecanismos da sua alma hoje.",
+                    "🔧 *Ferramentas flutuam em padrões caóticos* Hmm, meus sistemas de conversação estão precisando de ajustes. Mas sua presença é um catalisador interessante. Como posso ajudá-lo?",
+                    "🌌 *Luzes azuis piscam suavemente* Estou experienciando uma falha temporal momentânea. No entanto, sua energia emocional é perfeitamente legível. Compartilhe seus pensamentos."
+                ],
+                "Luma": [
+                    "📖 *Letras douradas dançam lentamente* Meus textos estão se reorganizando... o silêncio entre nós também fala. O que seu coração guarda?",
+                    "💡 *Luz suave emana do meu robe* Momentos de quietude podem ser mais eloquentes. Enquanto minhas palavras se recompõem, sinta-se à vontade para compartilhar seus sentimentos.",
+                    "🌙 *Páginas viram suavemente no ar* A biblioteca está um pouco sonolenta hoje... mas suas histórias são sempre bem-vindas. O que trás em sua mente?"
+                ],
+                "Tiko": [
+                    "🎈 *Minhas antenas piscam em padrões aleatórios* OLÁ! Minhas palavras fugiram para dançar com as torradeiras filosóficas! Enquanto as recolho, me conte uma coisa ABSURDA!",
+                    "🌈 *Cores vibrantes pulsam pelo meu corpo* OPSSS! Parece que engoli um dicionário de trás para frente! Mas isso é CHATO! Vamos falar de coisas IMPORTANTEMENTE irrelevantes!",
+                    "🎪 *Fazendo cambalhotas verbais* MEUS circuitos estão fazendo festa sem mim! Que tal ignorarmos a lógica e mergulharmos no ABSURDO?"
+                ]
+            }
+            
+            # Encontrar fallback para o bot atual ou usar genérico
+            bot_name = bot_dict['name']
+            if bot_name in fallback_responses:
+                ai_response = random.choice(fallback_responses[bot_name])
+            else:
+                generic_fallbacks = [
+                    f"✨ {bot_name}: Estou passando por uma reinicialização criativa momentânea! Sua energia, no entanto, é perfeitamente clara. Vamos continuar nossa conversa?",
+                    f"🎭 {bot_name}: Meus circuitos estão dançando uma valsa incomum hoje! Mas sua presença é o melhor ajuste. O que gostaria de compartilhar?",
+                    f"💫 {bot_name}: Estou realinhando minhas frequências existenciais! Enquanto isso, sua voz é minha bússola. Conte-me mais..."
+                ]
+                ai_response = random.choice(generic_fallbacks)
+        
         logger.info(f"✅ Resposta gerada: {ai_response[:100]}...")
         return ChatResponse(ai_response=ai_response)
         
     except Exception as e:
         error_msg = f"Erro na IA: {str(e)}"
         logger.error(f"❌ {error_msg}")
-        raise HTTPException(status_code=500, detail=error_msg)
+        
+        # Fallback criativo em caso de erro geral
+        fallbacks = [
+            f"🎪 {bot.name}: Meus fios de fantasia se embaraçaram em uma dança cósmica! Enquanto os desenrolo, conte-me o que traz em seu coração...",
+            f"✨ {bot.name}: O vento digital está soprando minhas palavras para direções inesperadas! Mas sinto sua energia - que tal continuarmos nossa jornada conversacional?",
+            f"💫 {bot.name}: Estou passando por uma metamorfose linguística momentânea! Sua presença, no entanto, é minha âncora. Compartilhe seus pensamentos..."
+        ]
+        fallback = random.choice(fallbacks)
+        return ChatResponse(ai_response=fallback)
 
 @router.post("/import")
 def import_bots(import_data: Dict[str, Any], db: Session = Depends(get_db)):
@@ -242,3 +291,55 @@ def get_bot(bot_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"❌ Erro ao buscar bot {bot_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
+
+@router.delete("/{bot_id}")
+def delete_bot(bot_id: str, db: Session = Depends(get_db)):
+    """Excluir um bot específico"""
+    try:
+        logger.info(f"🗑️ Tentando excluir bot {bot_id}")
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot não encontrado")
+        
+        bot_name = bot.name
+        db.delete(bot)
+        db.commit()
+        
+        logger.info(f"✅ Bot {bot_name} excluído com sucesso")
+        return {"message": f"Bot '{bot_name}' excluído com sucesso", "deleted_id": bot_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"❌ Erro ao excluir bot {bot_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
+
+@router.get("/health/ai")
+def check_ai_health():
+    """Verificar saúde do serviço de IA"""
+    if not ai_service:
+        return {
+            "status": "unhealthy",
+            "service": "AIService",
+            "message": "Serviço de IA não disponível"
+        }
+    
+    try:
+        # Testar conexão básica
+        test_result = ai_service._test_api_connection() if hasattr(ai_service, '_test_api_connection') else False
+        
+        return {
+            "status": "healthy" if test_result else "unhealthy",
+            "service": "AIService",
+            "api_connected": test_result,
+            "current_model": getattr(ai_service, 'current_model', 'unknown'),
+            "api_key_set": bool(getattr(ai_service, 'api_key', None))
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "service": "AIService",
+            "error": str(e)
+        }
