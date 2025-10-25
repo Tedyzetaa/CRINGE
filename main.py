@@ -8,7 +8,7 @@ import uuid
 from typing import List, Optional
 import os
 
-app = FastAPI(title="CRINGE API", version="1.0.0")
+app = FastAPI(title="CRINGE API", version="2.0.0")
 
 # Configurar CORS
 app.add_middleware(
@@ -109,7 +109,7 @@ def init_db():
     conn.close()
 
 def insert_default_bots():
-    """Insere os bots padrão no banco de dados"""
+    """Insere os 4 bots padrão no banco de dados"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -122,7 +122,7 @@ def insert_default_bots():
         
         default_bots = [
             {
-                "id": str(uuid.uuid4()),
+                "id": "6fb7db99-3438-4aa5-8e5c-bf47b73241b9",
                 "creator_id": "system",
                 "name": "Pimenta (Pip)",
                 "gender": "Feminino",
@@ -137,7 +137,7 @@ def insert_default_bots():
                 "ai_config": json.dumps({"temperature": 0.9, "max_output_tokens": 768})
             },
             {
-                "id": str(uuid.uuid4()),
+                "id": "bb994817-fa78-4cdd-869e-f589e3df5c88",
                 "creator_id": "system",
                 "name": "Zimbrak",
                 "gender": "Masculino",
@@ -152,7 +152,7 @@ def insert_default_bots():
                 "ai_config": json.dumps({"temperature": 0.7, "max_output_tokens": 650})
             },
             {
-                "id": str(uuid.uuid4()),
+                "id": "e9313207-c9b4-4cf9-a251-e6756ca9cb76",
                 "creator_id": "system", 
                 "name": "Luma",
                 "gender": "Feminino",
@@ -167,7 +167,7 @@ def insert_default_bots():
                 "ai_config": json.dumps({"temperature": 0.6, "max_output_tokens": 500})
             },
             {
-                "id": str(uuid.uuid4()),
+                "id": "a3c8f5d2-1b47-4e89-9f12-8d45c67e1234",
                 "creator_id": "system",
                 "name": "Tiko", 
                 "gender": "Não-binário",
@@ -207,7 +207,7 @@ def insert_default_bots():
             ))
         
         conn.commit()
-        print("✅ Bots padrão inseridos com sucesso!")
+        print("✅ 4 bots padrão inseridos com sucesso!")
     else:
         print(f"✅ Banco de dados já possui {count} bots")
     
@@ -218,23 +218,64 @@ def insert_default_bots():
 async def startup_event():
     init_db()
     insert_default_bots()
-    print("✅ Sistema inicializado com sucesso!")
+    print("🚀 CRINGE API inicializada com sucesso!")
 
-# Routes (mantenha as rotas existentes daqui para baixo...)
+# Routes
 @app.get("/")
 async def root():
     return {
         "message": "🚀 CRINGE API está rodando!",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "endpoints": {
+            "GET /": "Esta mensagem",
+            "GET /health": "Health check com estatísticas",
             "GET /bots": "Listar todos os bots",
             "GET /bots/{bot_id}": "Obter um bot específico",
             "POST /bots/import": "Importar bots via JSON",
             "DELETE /bots/{bot_id}": "Excluir um bot",
             "POST /bots/chat/{bot_id}": "Chat com um bot",
-            "GET /conversations/{conversation_id}": "Obter histórico de conversa"
+            "GET /conversations/{conversation_id}": "Obter histórico de conversa",
+            "GET /reset": "Resetar banco de dados (apenas para desenvolvimento)"
         }
     }
+
+@app.get("/health")
+async def health_check():
+    """Health check com estatísticas"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Contar bots
+        cursor.execute("SELECT COUNT(*) as count FROM bots")
+        bots_count = cursor.fetchone()['count']
+        
+        # Contar conversas
+        cursor.execute("SELECT COUNT(*) as count FROM conversations")
+        conversations_count = cursor.fetchone()['count']
+        
+        # Contar mensagens
+        cursor.execute("SELECT COUNT(*) as count FROM messages")
+        messages_count = cursor.fetchone()['count']
+        
+        conn.close()
+        
+        return {
+            "status": "healthy",
+            "service": "CRINGE API",
+            "database": "connected",
+            "statistics": {
+                "bots": bots_count,
+                "conversations": conversations_count,
+                "messages": messages_count
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "service": "CRINGE API",
+            "error": str(e)
+        }
 
 @app.get("/bots", response_model=List[BotResponse])
 async def get_bots():
@@ -242,7 +283,7 @@ async def get_bots():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM bots")
+        cursor.execute("SELECT * FROM bots ORDER BY created_at DESC")
         bots = cursor.fetchall()
         conn.close()
         
@@ -283,47 +324,97 @@ async def get_bot(bot_id: str):
 @app.post("/bots/import")
 async def import_bots(import_request: ImportRequest):
     """Importar múltiplos bots"""
+    print(f"📥 Recebendo {len(import_request.bots)} bots para importação")
+    
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
         imported_count = 0
-        for bot_data in import_request.bots:
-            bot_id = str(uuid.uuid4())
-            
-            cursor.execute('''
-                INSERT INTO bots (
-                    id, creator_id, name, gender, introduction, personality,
-                    welcome_message, avatar_url, tags, conversation_context,
-                    context_images, system_prompt, ai_config
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                bot_id,
-                bot_data.creator_id,
-                bot_data.name,
-                bot_data.gender,
-                bot_data.introduction,
-                bot_data.personality,
-                bot_data.welcome_message,
-                bot_data.avatar_url,
-                json.dumps(bot_data.tags),
-                bot_data.conversation_context,
-                bot_data.context_images,
-                bot_data.system_prompt,
-                json.dumps(bot_data.ai_config)
-            ))
-            
-            imported_count += 1
+        errors = []
+        
+        for i, bot_data in enumerate(import_request.bots):
+            try:
+                bot_id = str(uuid.uuid4())
+                
+                # Validar campos obrigatórios
+                required_fields = {
+                    'name': bot_data.name,
+                    'introduction': bot_data.introduction,
+                    'welcome_message': bot_data.welcome_message,
+                    'system_prompt': bot_data.system_prompt
+                }
+                
+                missing_fields = []
+                for field, value in required_fields.items():
+                    if not value or value.strip() == "":
+                        missing_fields.append(field)
+                
+                if missing_fields:
+                    errors.append(f"Bot {i+1}: Campos obrigatórios faltando: {', '.join(missing_fields)}")
+                    continue
+                
+                # Usar valores padrão para campos opcionais
+                creator_id = bot_data.creator_id if bot_data.creator_id else "user"
+                gender = bot_data.gender if bot_data.gender else "Não especificado"
+                personality = bot_data.personality if bot_data.personality else "Personalidade não definida"
+                avatar_url = bot_data.avatar_url if bot_data.avatar_url else "https://i.imgur.com/07kI9Qh.jpeg"
+                tags = bot_data.tags if bot_data.tags else ["importado"]
+                conversation_context = bot_data.conversation_context if bot_data.conversation_context else "Contexto de conversa padrão"
+                context_images = bot_data.context_images if bot_data.context_images else "[]"
+                ai_config = bot_data.ai_config if bot_data.ai_config else {"temperature": 0.7, "max_output_tokens": 500}
+                
+                # Inserir no banco
+                cursor.execute('''
+                    INSERT INTO bots (
+                        id, creator_id, name, gender, introduction, personality,
+                        welcome_message, avatar_url, tags, conversation_context,
+                        context_images, system_prompt, ai_config
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    bot_id,
+                    creator_id,
+                    bot_data.name,
+                    gender,
+                    bot_data.introduction,
+                    personality,
+                    bot_data.welcome_message,
+                    avatar_url,
+                    json.dumps(tags),
+                    conversation_context,
+                    context_images,
+                    bot_data.system_prompt,
+                    json.dumps(ai_config)
+                ))
+                
+                imported_count += 1
+                print(f"✅ Bot '{bot_data.name}' importado com sucesso")
+                
+            except Exception as e:
+                error_msg = f"Erro no bot {i+1} ({getattr(bot_data, 'name', 'Sem nome')}): {str(e)}"
+                errors.append(error_msg)
+                print(f"❌ {error_msg}")
         
         conn.commit()
         conn.close()
         
-        return {
-            "message": f"✅ {imported_count} bots importados com sucesso!",
-            "imported_count": imported_count
-        }
+        if errors:
+            return JSONResponse(
+                status_code=207,  # Multi-Status
+                content={
+                    "message": f"Importação parcial: {imported_count} bots importados, {len(errors)} erros",
+                    "imported_count": imported_count,
+                    "errors": errors
+                }
+            )
+        else:
+            return {
+                "message": f"✅ {imported_count} bots importados com sucesso!",
+                "imported_count": imported_count
+            }
         
     except Exception as e:
+        print(f"💥 Erro geral na importação: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao importar bots: {str(e)}")
 
 @app.delete("/bots/{bot_id}")
@@ -334,7 +425,7 @@ async def delete_bot(bot_id: str):
         cursor = conn.cursor()
         
         # Verificar se o bot existe
-        cursor.execute("SELECT id FROM bots WHERE id = ?", (bot_id,))
+        cursor.execute("SELECT id, name FROM bots WHERE id = ?", (bot_id,))
         bot = cursor.fetchone()
         
         if not bot:
@@ -342,6 +433,8 @@ async def delete_bot(bot_id: str):
                 status_code=404,
                 content={"error": "Bot não encontrado"}
             )
+        
+        bot_name = bot['name']
         
         # Primeiro excluir as mensagens das conversas deste bot
         cursor.execute('''
@@ -361,8 +454,9 @@ async def delete_bot(bot_id: str):
         conn.close()
         
         return {
-            "message": "Bot excluído com sucesso",
-            "deleted_bot_id": bot_id
+            "message": f"Bot '{bot_name}' excluído com sucesso",
+            "deleted_bot_id": bot_id,
+            "deleted_bot_name": bot_name
         }
         
     except Exception as e:
@@ -405,9 +499,9 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
             (user_message_id, conversation_id, chat_request.message, True)
         )
         
-        # Aqui você integraria com o serviço de IA
-        # Por enquanto, vamos simular uma resposta
-        ai_response = f"🤖 [{bot_dict['name']}]: Esta é uma resposta simulada para: '{chat_request.message}'. Configure o serviço de IA para respostas reais."
+        # Simular resposta do bot (substituir por integração com IA real)
+        bot_name = bot_dict['name']
+        ai_response = f"🤖 [{bot_name}]: Recebi sua mensagem: '{chat_request.message}'. Esta é uma resposta simulada. Configure um serviço de IA para respostas reais."
         
         # Salvar resposta do bot
         bot_message_id = str(uuid.uuid4())
@@ -422,7 +516,8 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
         return {
             "response": ai_response,
             "conversation_id": conversation_id,
-            "bot_id": bot_id
+            "bot_id": bot_id,
+            "bot_name": bot_name
         }
         
     except HTTPException:
@@ -452,11 +547,17 @@ async def get_conversation(conversation_id: str):
         ''', (conversation_id,))
         messages = cursor.fetchall()
         
+        # Buscar informações do bot
+        cursor.execute("SELECT name FROM bots WHERE id = ?", (conversation['bot_id'],))
+        bot = cursor.fetchone()
+        bot_name = bot['name'] if bot else "Bot Desconhecido"
+        
         conn.close()
         
         return {
             "conversation_id": conversation_id,
             "bot_id": conversation['bot_id'],
+            "bot_name": bot_name,
             "messages": [
                 {
                     "id": msg['id'],
@@ -473,10 +574,25 @@ async def get_conversation(conversation_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao buscar conversa: {str(e)}")
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "CRINGE API"}
+@app.get("/reset")
+async def reset_database():
+    """Resetar banco de dados (APENAS PARA DESENVOLVIMENTO)"""
+    try:
+        # ⚠️ AVISO: Isso apaga todos os dados!
+        if os.path.exists('cringe.db'):
+            os.remove('cringe.db')
+            print("🗑️ Banco de dados resetado")
+        
+        # Reinicializar
+        init_db()
+        insert_default_bots()
+        
+        return {
+            "message": "✅ Banco de dados resetado com sucesso!",
+            "warning": "⚠️ TODOS OS DADOS FORAM APAGADOS"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao resetar banco: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
