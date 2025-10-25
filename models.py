@@ -20,7 +20,6 @@ class Bot(Base):
     system_prompt = Column(Text)
 
     def to_dict(self):
-        """Converte para dicionário de forma segura"""
         try:
             tags = json.loads(self.tags) if self.tags else []
         except:
@@ -46,6 +45,3 @@ class Bot(Base):
             "system_prompt": self.system_prompt,
             "ai_config": ai_config
         }
-    
-    def __repr__(self):
-        return f"<Bot(id={self.id}, name='{self.name}')>"
