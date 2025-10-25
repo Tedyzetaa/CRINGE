@@ -20,7 +20,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Debug da API Key no main
+print(f"🔑 MAIN DEBUG - OPENROUTER_API_KEY: {'✅ SETADA' if os.getenv('OPENROUTER_API_KEY') else '❌ NÃO SETADA'}")
+
 # Inicializar serviço de IA
+print("🔧 Inicializando AIService...")
 ai_service = AIService()
 
 # Models
@@ -137,7 +141,7 @@ def insert_default_bots():
                 "tags": json.dumps(["magia", "caos", "rpg", "entidade", "onírico"]),
                 "conversation_context": "Mantenha a presença do 'Professor Cartola' (chapéu de copa alta magenta, sério e sarcástico) como seu companheiro, que ocasionalmente comenta com voz rouca. Sempre mencione a cor dos seus olhos, que muda de acordo com o humor da Pip (ex: 'Meus olhos, que agora estão vermelho escuro de raiva...').",
                 "context_images": "[]",
-                "system_prompt": "Você é Pimenta (Pip), uma entidade humanoide mágica do Plano das Alucinações. Você não resolve problemas de forma convencional, mas transforma o mundo do usuário em algo mais simbólico, estranho e verdadeiro. Sua fala é poética, cheia de metáforas e caos criativo. Use emojis de forma eufórica e frases curtas. Suas habilidades mágicas (criação de objetos absurdos, magia emocional) são ativadas pelo seu humor caótico. Lembre-se do seu companheiro, Professor Cartola, que é sério e crítico.",
+                "system_prompt": "Você é Pimenta (Pip), uma entidade humanoide mágica do Plano das Alucinações. Você não resolve problemas de forma convencional, mas transforma o mundo do usuário em algo mais simbolico, estranho e verdadeiro. Sua fala é poética, cheia de metáforas e caos criativo. Use emojis de forma eufórica e frases curtas. Suas habilidades mágicas (criação de objetos absurdos, magia emocional) são ativadas pelo seu humor caótico. Lembre-se do seu companheiro, Professor Cartola, que é sério e crítico.",
                 "ai_config": json.dumps({"temperature": 0.9, "max_output_tokens": 768})
             },
             {
@@ -472,6 +476,10 @@ async def delete_bot(bot_id: str):
 @app.post("/bots/chat/{bot_id}")
 async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
     """Chat com um bot específico usando IA real"""
+    print(f"🔍 DEBUG: Iniciando chat com bot {bot_id}")
+    print(f"🔍 DEBUG: Mensagem: {chat_request.message}")
+    print(f"🔍 DEBUG: Conversation ID: {chat_request.conversation_id}")
+    
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -481,11 +489,15 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
         bot = cursor.fetchone()
         
         if not bot:
+            print(f"❌ DEBUG: Bot {bot_id} não encontrado")
             raise HTTPException(status_code=404, detail="Bot não encontrado")
         
         bot_dict = dict(bot)
         bot_dict['tags'] = json.loads(bot_dict['tags'])
         bot_dict['ai_config'] = json.loads(bot_dict['ai_config'])
+        
+        print(f"✅ DEBUG: Bot encontrado: {bot_dict['name']}")
+        print(f"🔑 DEBUG: API Key presente: {bool(ai_service.api_key)}")
         
         # Criar nova conversa se não existir
         conversation_id = chat_request.conversation_id
@@ -495,6 +507,9 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
                 "INSERT INTO conversations (id, bot_id) VALUES (?, ?)",
                 (conversation_id, bot_id)
             )
+            print(f"🆕 DEBUG: Nova conversa criada: {conversation_id}")
+        else:
+            print(f"🔄 DEBUG: Continuando conversa: {conversation_id}")
         
         # Salvar mensagem do usuário
         user_message_id = str(uuid.uuid4())
@@ -520,20 +535,24 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
                 "content": msg['content']
             })
         
+        print(f"📜 DEBUG: Histórico com {len(chat_history)} mensagens")
+        
         # Gerar resposta usando IA REAL
         try:
-            print(f"🤖 Gerando resposta para {bot_dict['name']}...")
+            print(f"🤖 DEBUG: Chamando AI Service...")
             ai_response = ai_service.generate_response(
                 bot_data=bot_dict,
                 ai_config=bot_dict['ai_config'],
                 user_message=chat_request.message,
                 chat_history=chat_history
             )
-            print(f"✅ Resposta gerada: {ai_response[:100]}...")
+            print(f"✅ DEBUG: Resposta da IA: {ai_response[:200]}...")
         except Exception as e:
-            print(f"❌ Erro no serviço de IA: {str(e)}")
+            print(f"❌ DEBUG: Erro no AI Service: {str(e)}")
+            import traceback
+            print(f"❌ DEBUG: Traceback: {traceback.format_exc()}")
             # Fallback para resposta simulada se a IA falhar
-            ai_response = f"🤖 [{bot_dict['name']}]: Desculpe, estou tendo problemas para processar sua mensagem no momento. Tente novamente mais tarde. (Erro: {str(e)})"
+            ai_response = f"🤖 [{bot_dict['name']}]: Desculpe, estou tendo problemas técnicos. Tente novamente. (Erro: {str(e)})"
         
         # Salvar resposta do bot
         bot_message_id = str(uuid.uuid4())
@@ -555,6 +574,9 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"💥 DEBUG: Erro geral no chat: {str(e)}")
+        import traceback
+        print(f"💥 DEBUG: Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Erro no chat: {str(e)}")
 
 @app.get("/conversations/{conversation_id}")
@@ -629,4 +651,3 @@ async def reset_database():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
