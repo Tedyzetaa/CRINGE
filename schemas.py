@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
+# --- Schema Base para Bot ---
 class BotBase(BaseModel):
     name: str = Field(..., max_length=100)
     gender: Optional[str] = None
@@ -15,11 +16,13 @@ class BotBase(BaseModel):
     context_images: Optional[str] = None
     
     class Config:
-        from_attributes = True  # CORRETO para Pydantic 2.x
+        from_attributes = True
 
+# --- Schema para Criação de Bot ---
 class BotCreate(BotBase):
     creator_id: str
 
+# --- Schema para Leitura (Resposta da API) ---
 class Bot(BotBase):
     id: str
     creator_id: str
@@ -27,7 +30,9 @@ class Bot(BotBase):
     class Config:
         from_attributes = True
 
+# --- Schema para exibição de bots ---
 class BotDisplay(BaseModel):
+    """Schema para exibição de bots na listagem (campos reduzidos)"""
     id: str
     name: str
     gender: Optional[str] = None
@@ -39,6 +44,7 @@ class BotDisplay(BaseModel):
     class Config:
         from_attributes = True
 
+# --- Schemas para Chat ---
 class ChatRequest(BaseModel):
     user_message: str
     chat_history: List[Dict[str, str]] = Field(default_factory=list)
@@ -46,6 +52,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     ai_response: str
 
+# --- Schemas para User e Group ---
 class User(BaseModel):
     id: str
     name: str
@@ -60,6 +67,7 @@ class Group(BaseModel):
     class Config:
         from_attributes = True
 
+# --- Schema para Importação/Exportação ---
 class BotListFile(BaseModel):
     bots: List[Bot] = Field(default_factory=list)
 
