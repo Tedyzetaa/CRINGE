@@ -26,6 +26,13 @@ if 'delete_bot_name' not in st.session_state:
     st.session_state.delete_bot_name = None
 if 'conversations' not in st.session_state:
     st.session_state.conversations = {}
+if 'widget_key_counter' not in st.session_state:
+    st.session_state.widget_key_counter = 0
+
+def get_unique_key(prefix="key"):
+    """Gera uma chave única para widgets"""
+    st.session_state.widget_key_counter += 1
+    return f"{prefix}_{st.session_state.widget_key_counter}"
 
 # Funções da API
 def load_bots_from_db() -> List[Dict]:
@@ -98,10 +105,10 @@ def show_delete_confirmation(bot_name: str, bot_id: str):
     
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
-        if st.button("✅ SIM, EXCLUIR", type="primary", use_container_width=True):
+        if st.button("✅ SIM, EXCLUIR", key=get_unique_key("confirm_delete"), type="primary", use_container_width=True):
             delete_bot(bot_id)
     with col2:
-        if st.button("❌ CANCELAR", use_container_width=True):
+        if st.button("❌ CANCELAR", key=get_unique_key("cancel_delete"), use_container_width=True):
             st.session_state.delete_confirm = None
             st.session_state.delete_bot_name = None
             st.rerun()
@@ -131,7 +138,7 @@ def show_bots_list():
         st.markdown("---")
     
     # Lista de bots
-    for bot in bots:
+    for i, bot in enumerate(bots):
         with st.container():
             col1, col2, col3 = st.columns([3, 1, 1])
             
@@ -150,13 +157,13 @@ def show_bots_list():
                     st.markdown(f"**Tags:** {tags_html}", unsafe_allow_html=True)
             
             with col2:
-                if st.button("💬 Conversar", key=f"chat_{bot['id']}", use_container_width=True):
+                if st.button("💬 Conversar", key=f"chat_{bot['id']}_{i}", use_container_width=True):
                     st.session_state.current_bot = bot
                     st.session_state.current_page = "chat"
                     st.rerun()
             
             with col3:
-                if st.button("🗑️ Excluir", key=f"delete_{bot['id']}", use_container_width=True, type="secondary"):
+                if st.button("🗑️ Excluir", key=f"delete_{bot['id']}_{i}", use_container_width=True, type="secondary"):
                     st.session_state.delete_confirm = bot['id']
                     st.session_state.delete_bot_name = bot['name']
                     st.rerun()
@@ -178,7 +185,7 @@ def show_chat_interface():
     with col1:
         st.title(f"💬 {bot['name']}")
     with col2:
-        if st.button("← Voltar", use_container_width=True):
+        if st.button("← Voltar", key=get_unique_key("back_chat"), use_container_width=True):
             st.session_state.current_page = "home"
             st.rerun()
     
@@ -192,12 +199,12 @@ def show_chat_interface():
     chat_container = st.container()
     
     # Input de mensagem
-    with st.form(key="chat_form", clear_on_submit=True):
+    with st.form(key=get_unique_key("chat_form"), clear_on_submit=True):
         col_input, col_send = st.columns([4, 1])
         with col_input:
             user_message = st.text_input(
                 "Digite sua mensagem...",
-                key="user_input",
+                key=get_unique_key("user_input"),
                 label_visibility="collapsed"
             )
         with col_send:
@@ -273,6 +280,7 @@ def show_import_page():
     uploaded_file = st.file_uploader(
         "Selecione um arquivo JSON com os personagens",
         type=['json'],
+        key=get_unique_key("file_uploader"),
         help="O arquivo deve estar no formato correto com a estrutura de bots"
     )
     
@@ -281,6 +289,7 @@ def show_import_page():
     json_input = st.text_area(
         "Cole o JSON aqui:",
         height=200,
+        key=get_unique_key("json_input"),
         placeholder='{"bots": [{...}]}'
     )
     
@@ -288,7 +297,7 @@ def show_import_page():
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("📤 Importar do Upload", use_container_width=True):
+        if st.button("📤 Importar do Upload", key=get_unique_key("import_upload"), use_container_width=True):
             if uploaded_file is not None:
                 try:
                     bots_data = json.load(uploaded_file)
@@ -300,7 +309,7 @@ def show_import_page():
                 st.warning("⚠️ Selecione um arquivo primeiro")
     
     with col2:
-        if st.button("📤 Importar do Texto", use_container_width=True):
+        if st.button("📤 Importar do Texto", key=get_unique_key("import_text"), use_container_width=True):
             if json_input.strip():
                 try:
                     bots_data = json.loads(json_input)
@@ -314,7 +323,7 @@ def show_import_page():
     st.markdown("---")
     
     # Exemplo de JSON
-    with st.expander("📋 Exemplo de Estrutura JSON"):
+    with st.expander("📋 Exemplo de Estrutura JSON", expanded=False):
         st.code("""
 {
   "bots": [
@@ -379,17 +388,17 @@ def show_home_page():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("🎭 Ver Personagens", use_container_width=True):
+        if st.button("🎭 Ver Personagens", key=get_unique_key("view_bots"), use_container_width=True):
             st.session_state.current_page = "bots"
             st.rerun()
     
     with col2:
-        if st.button("💬 Nova Conversa", use_container_width=True):
+        if st.button("💬 Nova Conversa", key=get_unique_key("new_chat"), use_container_width=True):
             st.session_state.current_page = "bots"
             st.rerun()
     
     with col3:
-        if st.button("📥 Importar", use_container_width=True):
+        if st.button("📥 Importar", key=get_unique_key("import_home"), use_container_width=True):
             st.session_state.current_page = "import"
             st.rerun()
     
@@ -407,13 +416,13 @@ def show_home_page():
                     st.image(bot['avatar_url'], use_column_width=True)
                     st.subheader(bot['name'])
                     st.write(bot['introduction'])
-                    if st.button(f"Conversar com {bot['name']}", key=f"home_chat_{bot['id']}"):
+                    if st.button(f"Conversar com {bot['name']}", key=f"home_chat_{bot['id']}_{idx}"):
                         st.session_state.current_bot = bot
                         st.session_state.current_page = "chat"
                         st.rerun()
         
         if len(bots) > 3:
-            if st.button("Ver Todos os Personagens →"):
+            if st.button("Ver Todos os Personagens →", key=get_unique_key("view_all_bots")):
                 st.session_state.current_page = "bots"
                 st.rerun()
     else:
@@ -445,7 +454,9 @@ with st.sidebar:
     }
     
     for page_name, page_id in page_options.items():
-        if st.button(page_name, use_container_width=True, 
+        if st.button(page_name, 
+                    key=f"nav_{page_id}",
+                    use_container_width=True, 
                     type="primary" if st.session_state.current_page == page_id else "secondary"):
             st.session_state.current_page = page_id
             st.rerun()
@@ -464,7 +475,7 @@ with st.sidebar:
         st.error("❌ API Offline")
     
     # Botão de limpar conversas
-    if st.button("🗑️ Limpar Todas as Conversas", use_container_width=True):
+    if st.button("🗑️ Limpar Todas as Conversas", key=get_unique_key("clear_chats"), use_container_width=True):
         st.session_state.conversations = {}
         st.success("Conversas limpas!")
         st.rerun()
