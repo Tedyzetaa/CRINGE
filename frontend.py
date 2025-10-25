@@ -8,7 +8,7 @@ import pandas as pd
 
 # --- Configuração Global PARA LOCAL ---
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "http://localhost:8000")
+    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "https://cringe-8h21.onrender.com")
 
 # URLs da API
 BOTS_API_URL = f"{st.session_state.api_base_url}/bots"
@@ -312,4 +312,5 @@ def main_page():
         import_bots_page()
 
 if __name__ == '__main__':
+
     main_page()
