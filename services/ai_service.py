@@ -4,95 +4,95 @@ import time
 from typing import Dict, Any, List
 
 OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-MAX_RETRIES = 3
-BACKOFF_FACTOR = 0.5
+MAX_RETRIES = 2
+BACKOFF_FACTOR = 1.0
 
 class AIService:
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.api_url = OPENROUTER_API_BASE_URL
         
-        # Debug da API Key
         print(f"🔑 DEBUG AI Service - API Key: {'✅ PRÉSENTE' if self.api_key else '❌ AUSENTE'}")
-        if self.api_key:
-            print(f"🔑 API Key (primeiros 10 chars): {self.api_key[:10]}...")
-        else:
-            print("❌ CRÍTICO: OPENROUTER_API_KEY não encontrada!")
-            print("💡 Dica: Verifique se a variável de ambiente está configurada no Render")
-
+        
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "HTTP-Referer": "https://github.com/Tedyzetaa/CRINGE",
             "X-Title": "CRINGE Bot Platform",
             "Content-Type": "application/json"
         }
-        self.http_client = httpx.Client(timeout=60.0)
+        self.http_client = httpx.Client(timeout=30.0)
         
-        # Lista de modelos disponíveis no OpenRouter
+        # Modelos mais estáveis em ordem de preferência
         self.available_models = [
+            "google/gemini-flash-1.5:free",
+            "anthropic/claude-3-haiku:beta",
+            "meta-llama/llama-3.1-8b-instruct:free",
             "mistralai/mistral-7b-instruct:free",
-            "huggingfaceh4/zephyr-7b-beta:free",
-            "google/palm-2-chat-bison-32k:free",
-            "anthropic/claude-3-haiku",
-            "openai/gpt-3.5-turbo",
         ]
         
         self.current_model = self.available_models[0]
-        
-        if not self.api_key:
-            print("❌ AVISO: OPENROUTER_API_KEY não encontrada!")
 
     def _call_openrouter_api(self, payload: Dict[str, Any]) -> str:
-        print(f"🔍 DEBUG AI Service - Iniciando chamada para OpenRouter")
-        print(f"🔍 DEBUG AI Service - Modelo atual: {self.current_model}")
+        print(f"🔍 DEBUG - Chamando OpenRouter com modelo: {self.current_model}")
         
-        for model in self.available_models:
-            payload["model"] = model
-            self.current_model = model
-            print(f"🔄 DEBUG AI Service - Tentando modelo: {model}")
-            
-            for attempt in range(MAX_RETRIES):
-                try:
-                    print(f"📤 DEBUG AI Service - Tentativa {attempt + 1} para {model}")
-                    response = self.http_client.post(self.api_url, headers=self.headers, json=payload)
-                    print(f"📥 DEBUG AI Service - Resposta status: {response.status_code}")
-                    
+        for attempt in range(MAX_RETRIES):
+            try:
+                print(f"📤 Tentativa {attempt + 1} para {self.current_model}")
+                response = self.http_client.post(
+                    self.api_url, 
+                    headers=self.headers, 
+                    json=payload,
+                    timeout=30.0
+                )
+                
+                print(f"📥 Status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result['choices'][0]['message']['content'].strip()
+                    print(f"✅ Resposta recebida: {content[:100]}...")
+                    return content
+                elif response.status_code == 429:
+                    print("⚠️ Rate limit, tentando próximo modelo...")
+                    break
+                else:
                     response.raise_for_status()
                     
-                    result = response.json()
-                    print(f"✅ DEBUG AI Service - Resposta recebida do modelo {model}")
-                    return result['choices'][0]['message']['content'].strip()
-
-                except httpx.HTTPStatusError as e:
-                    print(f"❌ DEBUG AI Service - HTTP Error {e.response.status_code} para {model}: {e}")
-                    if e.response.status_code == 404:
-                        break
-                    elif e.response.status_code == 402:
-                        return "❌ Sem créditos na API OpenRouter."
-                    elif e.response.status_code in (429, 503) and attempt < MAX_RETRIES - 1:
-                        time.sleep(BACKOFF_FACTOR * (2 ** attempt))
-                        continue
-                    else:
-                        if attempt == MAX_RETRIES - 1:
-                            continue
-                except Exception as e:
-                    print(f"💥 DEBUG AI Service - Exception para {model}: {e}")
-                    if attempt < MAX_RETRIES - 1:
-                        time.sleep(BACKOFF_FACTOR * (2 ** attempt))
-                        continue
+            except httpx.TimeoutException:
+                print(f"⏰ Timeout na tentativa {attempt + 1}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(BACKOFF_FACTOR * (2 ** attempt))
+                    continue
+            except Exception as e:
+                print(f"❌ Erro na tentativa {attempt + 1}: {str(e)}")
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(BACKOFF_FACTOR * (2 ** attempt))
+                    continue
         
-        return "❌ Todos os modelos falharam."
+        # Se todos os modelos falharem, tentar o próximo modelo na lista
+        current_index = self.available_models.index(self.current_model)
+        if current_index < len(self.available_models) - 1:
+            self.current_model = self.available_models[current_index + 1]
+            print(f"🔄 Mudando para modelo: {self.current_model}")
+            return self._call_openrouter_api(payload)
+        
+        return "❌ Desculpe, estou tendo dificuldades técnicas no momento. Podemos tentar novamente?"
 
-    def _prepare_payload(self, system_prompt: str, chat_history: List[Dict[str, str]], user_message: str, temperature: float = 0.7, max_tokens: int = 512) -> Dict[str, Any]:
+    def _prepare_payload(self, system_prompt: str, chat_history: List[Dict[str, str]], user_message: str, temperature: float = 0.7, max_tokens: int = 400) -> Dict[str, Any]:
         messages = []
         
+        # System prompt mais claro
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            messages.append({
+                "role": "system", 
+                "content": f"{system_prompt}\n\nIMPORTANTE: Responda com APENAS UMA mensagem. Não repita a mesma resposta. Mantenha a conversa fluindo naturalmente."
+            })
         
-        for message in chat_history:
+        # Histórico limitado para evitar contexto muito longo
+        for message in chat_history[-6:]:  # Últimas 6 mensagens apenas
             role = message.get("role")
             content = message.get("content", "")
-            if role in ["user", "assistant"]:
+            if role in ["user", "assistant"] and content.strip():
                 messages.append({"role": role, "content": content})
         
         messages.append({"role": "user", "content": user_message})
@@ -100,20 +100,30 @@ class AIService:
         payload = {
             "messages": messages,
             "model": self.current_model,
-            "temperature": temperature,
+            "temperature": max(0.3, min(temperature, 0.9)),  # Limitar temperatura
             "max_tokens": max_tokens,
             "stream": False
         }
+        
+        print(f"📝 Payload - Temperature: {payload['temperature']}, Max Tokens: {max_tokens}")
         return payload
 
     def generate_response(self, bot_data: Any, ai_config: Dict[str, Any], user_message: str, chat_history: List[Dict[str, str]]) -> str:
-        system_prompt = f"{bot_data['system_prompt']}\n\nPersonalidade: {bot_data['personality']}\nContexto: {bot_data['conversation_context']}"
-        temperature = ai_config.get('temperature', 0.7)
-        max_tokens = ai_config.get('max_output_tokens', 512)
-
-        print(f"🔍 DEBUG AI Service - Gerando resposta para: {user_message}")
-        print(f"🔍 DEBUG AI Service - System Prompt: {system_prompt[:100]}...")
-        print(f"🔍 DEBUG AI Service - Temperature: {temperature}, Max Tokens: {max_tokens}")
+        # Converter para dict se for objeto SQLAlchemy
+        if hasattr(bot_data, 'to_dict'):
+            bot_dict = bot_data.to_dict()
+        else:
+            bot_dict = bot_data
+        
+        # System prompt mais limpo
+        system_prompt = bot_dict['system_prompt']
+        
+        # Configurações com fallbacks seguros
+        temperature = min(ai_config.get('temperature', 0.7), 0.8)  # Limitar temp máxima
+        max_tokens = min(ai_config.get('max_output_tokens', 400), 500)  # Limitar tokens
+        
+        print(f"🤖 Gerando resposta para: {user_message[:50]}...")
+        print(f"⚙️ Config - Temp: {temperature}, Tokens: {max_tokens}")
 
         payload = self._prepare_payload(
             system_prompt=system_prompt,
