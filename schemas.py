@@ -10,29 +10,28 @@ class BotBase(BaseModel):
     welcome_message: Optional[str] = None
     avatar_url: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
-    system_prompt: str = Field(..., description="Prompt de instrução principal para a IA do Bot.")
-    ai_config: Dict[str, Any] = Field(default_factory=dict, description="Configurações da IA (temperatura, max_tokens).")
+    system_prompt: str = Field(..., description="Prompt de instrução principal")
+    ai_config: Dict[str, Any] = Field(default_factory=dict)
     conversation_context: Optional[str] = None
     context_images: Optional[str] = None
     
     class Config:
-        from_attributes = True
+        orm_mode = True  # Mudado de from_attributes para orm_mode no Pydantic 1.x
 
 # --- Schema para Criação de Bot ---
 class BotCreate(BotBase):
     creator_id: str
 
-# --- Schema para Leitura (Resposta da API) ---
+# --- Schema para Leitura ---
 class Bot(BotBase):
     id: str
     creator_id: str
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
-# --- NOVO: Schema para exibição de bots ---
+# --- Schema para exibição de bots ---
 class BotDisplay(BaseModel):
-    """Schema para exibição de bots na listagem (campos reduzidos)"""
     id: str
     name: str
     gender: Optional[str] = None
@@ -42,7 +41,7 @@ class BotDisplay(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 # --- Schemas para Chat ---
 class ChatRequest(BaseModel):
@@ -52,24 +51,23 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     ai_response: str
 
-# --- Schemas para User e Group ---
+# --- Outros schemas ---
 class User(BaseModel):
     id: str
     name: str
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class Group(BaseModel):
     id: str
     name: str
 
     class Config:
-        from_attributes = True
+        orm_mode = True
 
-# --- Schema para Importação/Exportação ---
 class BotListFile(BaseModel):
     bots: List[Bot] = Field(default_factory=list)
 
     class Config:
-        from_attributes = True
+        orm_mode = True
