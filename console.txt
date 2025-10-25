@@ -1,2 +1,14 @@
 conda create --name rpg-ia python=3.11
 conda activate rpg-ia
+cd c:\cringe\4.0\cringe
+uvicorn main:app --reload
+pytest tests/
+pip se encontra em um mundo novo, e não sabe como foi parar lá
+
+conda activate rpg-ia
+cd c:\cringe\4.0\cringe
+streamlit run frontend.py
+
+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
+
+não estou triste - digo olhando para pip - como voce esta? e voce senhor chapeu? - digo com um sorriso no rosto

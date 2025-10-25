@@ -4,26 +4,25 @@ import json
 import time
 from typing import Optional, List, Dict, Any
 import os
+import pandas as pd
 
-# --- Configuração Global ---
-
-# Obtém a URL base da API (do ambiente ou usa o padrão local)
-# Vamos usar uma chave de sessão para armazenar a URL base de forma dinâmica
+# --- Configuração Global PARA LOCAL ---
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "https://cringe-8h21.onrender.com")
+    st.session_state.api_base_url = os.environ.get("API_BASE_URL", "http://localhost:8000")
 
-# As URLs da API são construídas com base no estado da sessão
+# URLs da API
 BOTS_API_URL = f"{st.session_state.api_base_url}/bots"
 CHAT_API_URL = f"{st.session_state.api_base_url}/bots/chat"
+IMPORT_API_URL = f"{st.session_state.api_base_url}/bots/import"
 
-# Configuração da página Streamlit
+# Configuração da página
 st.set_page_config(
-    page_title="CRINGE RPG-AI: V2.3 - Plataforma",
+    page_title="CRINGE RPG-AI: IMPORTADOR",
     layout="centered",
     initial_sidebar_state="expanded",
 )
 
-# Definir estados de sessão iniciais
+# Estados de sessão
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 'selection'
 if 'selected_bot' not in st.session_state:
@@ -34,255 +33,283 @@ if 'available_bots' not in st.session_state:
     st.session_state.available_bots = []
 if 'bots_loaded' not in st.session_state:
     st.session_state.bots_loaded = False
-
+if 'import_result' not in st.session_state:
+    st.session_state.import_result = None
 
 # --- Funções de API ---
-
-# O cache agora depende da API_BASE_URL para limpar o cache quando a URL muda
 @st.cache_data(ttl=300)
 def fetch_bots(api_base_url: str) -> List[Dict[str, Any]]:
     """Busca a lista de bots da API de backend."""
-    # Recalculamos a URL dentro da função para que o cache_data use o argumento
     url = f"{api_base_url}/bots"
     try:
-        st.info(f"Tentando conectar em: {url}")
         response = requests.get(url, timeout=10)
-        response.raise_for_status()  # Levanta erro para status 4xx/5xx
+        response.raise_for_status()
         bots_data = response.json()
         st.session_state.bots_loaded = True
         return bots_data
     except requests.exceptions.RequestException as e:
-        st.error(f"Nenhum bot encontrado ou a API não está acessível. Verifique o backend. Erro: {e}")
+        st.error(f"❌ Backend não encontrado em: {url}")
         st.session_state.bots_loaded = True
         return []
 
 def send_chat_message(bot_id: str, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
-    """Envia a mensagem do usuário e o histórico para a API de chat."""
-    # Usa a URL da API do estado da sessão
+    """Envia mensagem para a API de chat."""
     url = f"{st.session_state.api_base_url}/bots/chat/{bot_id}"
-    
     try:
-        payload = {
-            "user_message": user_message,
-            "chat_history": history
-        }
-        
-        with st.spinner("O Bot está pensando..."):
-            # Aumentando o timeout para dar mais chance ao modelo de IA
-            response = requests.post(url, json=payload, timeout=90) 
+        payload = {"user_message": user_message, "chat_history": history}
+        with st.spinner("🤖 O Bot está pensando..."):
+            response = requests.post(url, json=payload, timeout=60)
             response.raise_for_status()
             return response.json().get("ai_response")
-            
-    except requests.exceptions.HTTPError as e:
-        st.error(f"ERRO DE BACKEND: {e.response.status_code} - {e.response.reason}")
-        # Tenta mostrar o corpo do erro se possível
-        try:
-            error_body = e.response.json()
-            st.code(json.dumps(error_body, indent=2))
-        except:
-            st.code(e.response.text)
-        return None
     except requests.exceptions.RequestException as e:
-        st.error(f"ERRO DE BACKEND: A chamada à API falhou. Verifique se o backend está rodando em: {url}. Erro: {e}")
+        st.error(f"Erro ao enviar mensagem: {e}")
         return None
 
+def import_bots_from_json(json_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Importa bots via JSON para a API."""
+    try:
+        response = requests.post(IMPORT_API_URL, json=json_data, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erro ao importar bots: {e}")
+        return {"success": False, "message": str(e)}
 
-# --- Funções de Navegação e Estado ---
-
+# --- Funções de Navegação ---
 def set_page(page_name: str, bot_data: Optional[Dict[str, Any]] = None):
-    """Muda a página atual e o bot selecionado."""
     st.session_state.current_page = page_name
     if bot_data:
         st.session_state.selected_bot = bot_data
-        st.session_state.chat_history = []  # Limpa o histórico ao iniciar novo chat
+        st.session_state.chat_history = []
     else:
         st.session_state.selected_bot = None
-    
     st.rerun()
 
 def load_bots_and_check():
-    """Carrega os bots e atualiza o estado da sessão."""
     if not st.session_state.bots_loaded:
-        # Passa a URL base como argumento
-        bots = fetch_bots(st.session_state.api_base_url) 
+        bots = fetch_bots(st.session_state.api_base_url)
         st.session_state.available_bots = bots
-        # O estado bots_loaded é definido dentro de fetch_bots()
 
-
-# --- Views da Aplicação ---
-
+# --- Páginas da Aplicação ---
 def chat_page():
-    """Página de conversação com o bot selecionado."""
     bot = st.session_state.selected_bot
     if not bot:
-        st.error("Nenhum bot selecionado. Voltando para a seleção.")
+        st.error("Nenhum bot selecionado.")
         set_page('selection')
         return
 
-    st.header(f"💬 Conversando com {bot['name']} ({bot['gender'] if bot['gender'] else 'Bot'})")
-    st.markdown(f"**Personalidade:** {bot.get('personality', 'Sem descrição de personalidade.')}")
+    st.header(f"💬 Conversando com {bot['name']}")
+    st.markdown(f"**Personalidade:** {bot.get('personality', 'Sem descrição.')}")
 
-    # Botão Voltar
-    if st.button("⬅️ Voltar para a Seleção de Bots"):
+    if st.button("⬅️ Voltar para a Seleção"):
         set_page('selection')
         return
 
-    # Mensagem de Boas-Vindas (se o histórico estiver vazio)
     if not st.session_state.chat_history:
-        welcome_message = bot.get('welcome_message', "Olá! Como posso ajudar você hoje?")
+        welcome_message = bot.get('welcome_message', "Olá! Como posso ajudar?")
         st.session_state.chat_history.append({"role": "assistant", "content": welcome_message})
 
-    # Exibir histórico de chat
     for message in st.session_state.chat_history:
-        role = message["role"]
-        content = message["content"]
-        
-        # O Streamlit usa 'user' e 'assistant' para formatar
-        with st.chat_message(role):
-            st.write(content)
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
 
-    # Caixa de entrada de chat
     user_input = st.chat_input(f"Fale com {bot['name']}...")
-
     if user_input:
-        # 1. Adiciona a mensagem do usuário ao histórico
         st.session_state.chat_history.append({"role": "user", "content": user_input})
-        
-        # 2. Exibe a mensagem do usuário
         with st.chat_message("user"):
             st.write(user_input)
 
-        # 3. Prepara o histórico para a API (limitando os campos necessários)
-        # Passa o histórico completo, exceto a última mensagem do usuário (que já está no input)
         history_for_api = [
             {"role": msg["role"], "content": msg["content"]} 
             for msg in st.session_state.chat_history 
             if not (msg["role"] == "user" and msg["content"] == user_input)
         ]
         
-        # 4. Chama a API
-        ai_response = send_chat_message(
-            bot_id=bot['id'], 
-            user_message=user_input, 
-            history=history_for_api
-        )
-
-        # 5. Adiciona e exibe a resposta da AI
+        ai_response = send_chat_message(bot['id'], user_input, history_for_api)
         if ai_response:
             st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
             with st.chat_message("assistant"):
                 st.write(ai_response)
-        
         st.rerun()
 
-
 def selection_page():
-    """Página de seleção de bots."""
-    st.title("© CringeBot - Seleção de Bots")
-    
-    # Carrega os bots na primeira execução
+    st.title("© CringeBot - Bots Disponíveis")
     load_bots_and_check()
-
     bots = st.session_state.available_bots
 
     if not bots:
-        st.warning("Carregando bots ou falha na conexão. Verifique o status da API.")
+        st.warning("Nenhum bot encontrado. Importe bots via JSON na página de Importação.")
         return
 
-    st.subheader("Bots Existentes")
+    st.subheader(f"📊 {len(bots)} Bots Encontrados")
     
     for bot in bots:
         with st.container(border=True):
             col1, col2 = st.columns([1, 4])
-            
-            # Avatar
             with col1:
-                if bot.get('avatar_url'):
-                    # O Streamlit não tem um bom tratamento de erro para imagens, 
-                    # então usamos um fallback simples
-                    st.image(
-                        bot['avatar_url'], 
-                        width=100, 
-                        caption="Avatar",
-                        use_column_width="always"
-                    )
-                else:
-                    st.image("https://placehold.co/100x100/31333f/FFFFFF?text=BOT", width=100)
-            
-            # Dados do Bot
+                avatar = bot.get('avatar_url') or "https://placehold.co/100x100/31333f/FFFFFF?text=BOT"
+                st.image(avatar, width=100, caption="Avatar")
             with col2:
                 st.subheader(f"{bot['name']} ({bot.get('gender', 'Bot')})")
                 st.caption(f"ID: {bot['id']}")
                 st.markdown(f"**Personalidade:** {bot.get('personality', 'N/A')}")
-                
-                # Botão Conversar
-                if st.button(f"Conversar com {bot['name']} ({bot.get('gender', 'Bot')})", key=f"chat_{bot['id']}"):
+                if st.button(f"Conversar com {bot['name']}", key=f"chat_{bot['id']}"):
                     set_page('chat', bot)
 
-
-def create_bot_page():
-    """Página para criar um novo bot."""
-    st.header("✨ Criar Novo Bot")
-    st.info("Preencha as informações do bot. Ao salvar, o bot será persistido no DB e poderá ser exportado.")
+def import_bots_page():
+    st.title("📥 Importar Bots via JSON")
     
-    # Implementação de criação de bot aqui...
-    # Por enquanto, apenas um placeholder:
-    st.warning("Funcionalidade de Criação de Bot não implementada nesta versão. Por favor, importe via JSON.")
+    st.markdown("""
+    ### Como importar bots:
+    1. **Prepara seu JSON** no formato correto
+    2. **Faz upload** do arquivo ou cola o conteúdo
+    3. **Visualiza a prévia** dos bots
+    4. **Confirma a importação**
+    """)
     
-    if st.button("⬅️ Voltar para a Seleção de Bots"):
+    # Exemplo de JSON
+    with st.expander("📋 Exemplo de Formato JSON"):
+        st.code("""{
+  "bots": [
+    {
+      "creator_id": "seu-user-id",
+      "name": "Nome do Bot",
+      "gender": "Gênero",
+      "introduction": "Introdução...",
+      "personality": "Personalidade...",
+      "welcome_message": "Mensagem de boas-vindas",
+      "avatar_url": "https://...",
+      "tags": ["tag1", "tag2"],
+      "conversation_context": "Contexto...",
+      "context_images": "[]",
+      "system_prompt": "Prompt do sistema...",
+      "ai_config": {
+        "temperature": 0.9,
+        "max_output_tokens": 768
+      }
+    }
+  ]
+}""", language="json")
+    
+    # Upload de arquivo
+    uploaded_file = st.file_uploader("Escolha um arquivo JSON", type=['json'])
+    
+    json_content = st.text_area("Ou cole o conteúdo JSON aqui:", height=300, 
+                               placeholder='{"bots": [{...}]}')
+    
+    json_data = None
+    bots_to_import = []
+    
+    # Processa o JSON
+    if uploaded_file is not None:
+        try:
+            json_data = json.load(uploaded_file)
+            st.success(f"✅ Arquivo {uploaded_file.name} carregado com sucesso!")
+        except Exception as e:
+            st.error(f"❌ Erro ao ler arquivo: {e}")
+    
+    elif json_content.strip():
+        try:
+            json_data = json.loads(json_content)
+            st.success("✅ JSON válido!")
+        except Exception as e:
+            st.error(f"❌ JSON inválido: {e}")
+    
+    # Mostra prévia dos bots
+    if json_data and 'bots' in json_data:
+        bots_to_import = json_data['bots']
+        st.subheader(f"👁️ Prévia dos Bots ({len(bots_to_import)} encontrados)")
+        
+        for i, bot in enumerate(bots_to_import):
+            with st.expander(f"Bot {i+1}: {bot.get('name', 'Sem nome')}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Nome:**", bot.get('name', 'N/A'))
+                    st.write("**Gênero:**", bot.get('gender', 'N/A'))
+                    st.write("**Criador:**", bot.get('creator_id', 'N/A'))
+                with col2:
+                    st.write("**Tags:**", ", ".join(bot.get('tags', [])))
+                    st.write("**Temperatura:**", bot.get('ai_config', {}).get('temperature', 'N/A'))
+                
+                st.write("**Personalidade:**", bot.get('personality', 'N/A')[:200] + "...")
+        
+        # Botão de importação
+        if st.button("🚀 Importar Bots", type="primary", use_container_width=True):
+            with st.spinner("Importando bots..."):
+                result = import_bots_from_json(json_data)
+                
+                if result.get('success'):
+                    st.success(f"✅ {result.get('message', 'Bots importados com sucesso!')}")
+                    st.session_state.import_result = result
+                    
+                    # Mostra estatísticas
+                    if 'imported' in result and 'failed' in result:
+                        st.metric("Bots Importados", result['imported'])
+                        if result['failed'] > 0:
+                            st.metric("Falhas", result['failed'])
+                    
+                    # Limpa cache e recarrega bots
+                    st.cache_data.clear()
+                    st.session_state.bots_loaded = False
+                    
+                    # Opção para ver bots
+                    if st.button("📋 Ver Bots Importados"):
+                        set_page('selection')
+                else:
+                    st.error(f"❌ Falha na importação: {result.get('message', 'Erro desconhecido')}")
+    
+    elif json_data and 'bots' not in json_data:
+        st.error("❌ Formato inválido: O JSON deve conter uma chave 'bots' com a lista de bots.")
+    
+    # Botão voltar
+    if st.button("⬅️ Voltar para Seleção"):
         set_page('selection')
 
-# --- Layout Principal ---
-
 def main_page():
-    """Função principal que renderiza o layout e o conteúdo da página."""
-    
-    # Barra Lateral
     with st.sidebar:
-        st.subheader("Menu Principal")
-        if st.session_state.current_page == 'selection':
-            if st.button("🔄 Recarregar Bots"):
-                st.cache_data.clear() # Limpa o cache para forçar a busca
-                st.session_state.bots_loaded = False
-                st.rerun()
-
-        if st.button("🏠 Seleção de Bots", key="nav_selection"):
-            set_page('selection')
-        if st.button("✨ Criar Bot", key="nav_create_bot"):
-            set_page('create_bot')
-        if st.button("📦 Importar Bots (DB)", key="nav_import_bot"):
-            # Esta função provavelmente leva à função create_bot ou a uma nova página
-            st.warning("Função Importar não implementada.")
-            
-        st.markdown("---")
-        st.subheader("Configuração da API")
+        st.subheader("🧭 Navegação")
         
-        # Campo de entrada para a URL base da API
+        # Menu principal
+        if st.button("🏠 Seleção de Bots", use_container_width=True):
+            set_page('selection')
+        if st.button("📥 Importar Bots", use_container_width=True):
+            set_page('import_bots')
+        
+        st.markdown("---")
+        st.subheader("🌐 Configuração")
+        
         new_api_url = st.text_input(
-            "API Base URL:", 
-            st.session_state.api_base_url, 
-            key='api_url_input',
-            help="Altere para 'http://localhost:8000' ou sua URL do Render."
+            "URL do Backend:", 
+            st.session_state.api_base_url,
+            help="URL da API do backend"
         )
 
-        # Atualiza o estado da sessão e força o rerun se a URL mudar
         if new_api_url != st.session_state.api_base_url:
             st.session_state.api_base_url = new_api_url
-            st.cache_data.clear() # Limpa o cache para que a nova URL seja usada
+            st.cache_data.clear()
             st.session_state.bots_loaded = False
             st.rerun()
             
-        st.markdown("_Certifique-se de que o backend esteja rodando no endereço acima._")
+        # Status da conexão
+        try:
+            response = requests.get(f"{st.session_state.api_base_url}/", timeout=5)
+            if response.status_code == 200:
+                st.success("✅ Backend Online")
+            else:
+                st.error("❌ Backend com problemas")
+        except:
+            st.error("❌ Backend Offline")
+        
+        st.markdown("---")
+        st.info(f"Bots carregados: {len(st.session_state.available_bots)}")
 
-
-    # Conteúdo Principal
+    # Renderiza página atual
     if st.session_state.current_page == 'selection':
         selection_page()
     elif st.session_state.current_page == 'chat':
         chat_page()
-    elif st.session_state.current_page == 'create_bot':
-        create_bot_page()
+    elif st.session_state.current_page == 'import_bots':
+        import_bots_page()
 
 if __name__ == '__main__':
     main_page()
-

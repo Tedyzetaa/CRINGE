@@ -1,5 +1,3 @@
-# main.py (Backend FastAPI)
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -7,59 +5,57 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routers import bots
-import sys
+import os
 
-try:
-    from init_db import initialize_database_with_data
-except ImportError:
-    print("AVISO: Módulo 'init_db' não encontrado. Importação automática de bots desabilitada.")
-    initialize_database_with_data = None
+print("🚀 Iniciando CRINGE API no Render...")
 
+# Validações iniciais
+if not os.getenv("OPENROUTER_API_KEY"):
+    print("❌ ERRO: OPENROUTER_API_KEY não encontrada!")
+    print("💡 Configure OPENROUTER_API_KEY no Render Dashboard")
+    # Não saia em produção, apenas log o erro
 
-# 1. Cria a instância do FastAPI
+# Cria a instância do FastAPI
 app = FastAPI(
-    title="Cringe API",
-    version="3.0",
+    title="CRINGE API",
+    version="3.1",
     description="Backend API para o Cringe Bot Project",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
-# 2. Cria as tabelas do banco de dados (se não existirem)
-print("Criando tabelas no banco de dados...")
-try:
-    Base.metadata.create_all(bind=engine)
-    print("Tabelas criadas com sucesso.")
-except Exception as e:
-    print(f"ERRO CRÍTICO ao criar tabelas: {e}")
-    sys.exit(1)
-
-
-# 3. IMPORTAÇÃO CRÍTICA PARA RENDER (Popula o DB)
-if initialize_database_with_data:
-    print("Iniciando importação de bots (necessário devido ao DB volátil do Render)...")
-    try:
-        initialize_database_with_data()
-        print("Bots iniciais importados com sucesso.")
-    except Exception as e:
-        print(f"ERRO FATAL ao importar bots iniciais: {e}")
-else:
-    print("Função de inicialização de dados pulada.")
-
-
-# 4. Configuração de CORS
+# Configuração de CORS para produção
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Em produção, restrinja para seus domínios
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Cria as tabelas
+try:
+    print("📊 Criando tabelas no banco de dados...")
+    Base.metadata.create_all(bind=engine)
+    print("✅ Tabelas criadas com sucesso!")
+except Exception as e:
+    print(f"❌ Erro ao criar tabelas: {e}")
 
-# 5. Inclusão dos Roteadores
+# Inclui rotas
 app.include_router(bots.router)
 
-
-# 6. Rota Raiz Simples
+# Rotas básicas
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "Cringe API V3.0 is running."}
+    return {
+        "status": "ok", 
+        "message": "CRINGE API rodando no Render!",
+        "version": "3.1",
+        "ai_provider": "OpenRouter"
+    }
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "environment": "production"}
+
+# Não use __main__ no Render - o Render executa uvicorn diretamente
