@@ -11,6 +11,15 @@ class AIService:
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.api_url = OPENROUTER_API_BASE_URL
+        
+        # Debug da API Key
+        print(f"🔑 DEBUG AI Service - API Key: {'✅ PRÉSENTE' if self.api_key else '❌ AUSENTE'}")
+        if self.api_key:
+            print(f"🔑 API Key (primeiros 10 chars): {self.api_key[:10]}...")
+        else:
+            print("❌ CRÍTICO: OPENROUTER_API_KEY não encontrada!")
+            print("💡 Dica: Verifique se a variável de ambiente está configurada no Render")
+
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "HTTP-Referer": "https://github.com/Tedyzetaa/CRINGE",
@@ -34,19 +43,28 @@ class AIService:
             print("❌ AVISO: OPENROUTER_API_KEY não encontrada!")
 
     def _call_openrouter_api(self, payload: Dict[str, Any]) -> str:
+        print(f"🔍 DEBUG AI Service - Iniciando chamada para OpenRouter")
+        print(f"🔍 DEBUG AI Service - Modelo atual: {self.current_model}")
+        
         for model in self.available_models:
             payload["model"] = model
             self.current_model = model
+            print(f"🔄 DEBUG AI Service - Tentando modelo: {model}")
             
             for attempt in range(MAX_RETRIES):
                 try:
+                    print(f"📤 DEBUG AI Service - Tentativa {attempt + 1} para {model}")
                     response = self.http_client.post(self.api_url, headers=self.headers, json=payload)
+                    print(f"📥 DEBUG AI Service - Resposta status: {response.status_code}")
+                    
                     response.raise_for_status()
                     
                     result = response.json()
+                    print(f"✅ DEBUG AI Service - Resposta recebida do modelo {model}")
                     return result['choices'][0]['message']['content'].strip()
 
                 except httpx.HTTPStatusError as e:
+                    print(f"❌ DEBUG AI Service - HTTP Error {e.response.status_code} para {model}: {e}")
                     if e.response.status_code == 404:
                         break
                     elif e.response.status_code == 402:
@@ -58,6 +76,7 @@ class AIService:
                         if attempt == MAX_RETRIES - 1:
                             continue
                 except Exception as e:
+                    print(f"💥 DEBUG AI Service - Exception para {model}: {e}")
                     if attempt < MAX_RETRIES - 1:
                         time.sleep(BACKOFF_FACTOR * (2 ** attempt))
                         continue
@@ -88,9 +107,13 @@ class AIService:
         return payload
 
     def generate_response(self, bot_data: Any, ai_config: Dict[str, Any], user_message: str, chat_history: List[Dict[str, str]]) -> str:
-        system_prompt = f"{bot_data.system_prompt}\n\nPersonalidade: {bot_data.personality}\nContexto: {bot_data.conversation_context}"
+        system_prompt = f"{bot_data['system_prompt']}\n\nPersonalidade: {bot_data['personality']}\nContexto: {bot_data['conversation_context']}"
         temperature = ai_config.get('temperature', 0.7)
         max_tokens = ai_config.get('max_output_tokens', 512)
+
+        print(f"🔍 DEBUG AI Service - Gerando resposta para: {user_message}")
+        print(f"🔍 DEBUG AI Service - System Prompt: {system_prompt[:100]}...")
+        print(f"🔍 DEBUG AI Service - Temperature: {temperature}, Max Tokens: {max_tokens}")
 
         payload = self._prepare_payload(
             system_prompt=system_prompt,
