@@ -1,102 +1,138 @@
-# routers/bots.py
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import json
-import os
+import uuid
 
-# TENTA CORRIGIR O ERRO DE IMPORTAÇÃO (NameError: AIService)
-# Em ambientes de execução (como Uvicorn/Render), imports relativos (..) falham.
-# Tentamos usar o nome do módulo diretamente, se possível.
+# Importações absolutas
+from database import get_db
+from models import Bot
+from schemas import ChatRequest, ChatResponse, BotDisplay
 
+# Importação do serviço AI
 try:
-    # 1. Tentativa de importação para ambientes de teste e execução principal (com caminho absoluto)
-    from services.ai_service import AIService 
-    from database import get_db
-    from models import Bot
-    # Schemas são tipicamente importados no início do projeto, assumindo que estão em schemas.py
-    # Se você tem um subdiretório schemas, mude para: from schemas.seu_arquivo import ...
-    from schemas import ChatRequest, ChatResponse, BotDisplay
+    from services.ai_service import AIService
+    ai_service = AIService()
+    print("✅ AIService carregado com sucesso")
 except ImportError as e:
-    # 2. Fallback para imports relativos, que funcionam em alguns contextos (ex: dentro de testes)
-    try:
-        from ..database import get_db
-        from ..models import Bot
-        from ..schemas import ChatRequest, ChatResponse, BotDisplay
-        from ..services.ai_service import AIService
-    except ImportError as e_relative:
-        print(f"ERRO CRÍTICO DE IMPORTAÇÃO: Não foi possível importar AIService ou componentes do DB. Isso geralmente significa que o servidor (uvicorn) não está sendo iniciado a partir do diretório raiz do projeto.")
-        # Se a importação falhar, defina uma classe placeholder para evitar NameError
-        class AIService:
-            def generate_response(self, *args, **kwargs):
-                raise NotImplementedError("AIService não foi carregado corretamente.")
-        
-router = APIRouter(
-    prefix="/bots",
-    tags=["Bots"],
-)
+    print(f"❌ Erro ao importar AIService: {e}")
+    ai_service = None
+except Exception as e:
+    print(f"❌ Erro na inicialização do AIService: {e}")
+    ai_service = None
 
-# Inicializa o serviço de IA.
-ai_service = AIService()
-
-# --- Rotas de Bots (GET /bots) ---
+router = APIRouter(prefix="/bots", tags=["Bots"])
 
 @router.get("/", response_model=List[BotDisplay])
 def list_bots(db: Session = Depends(get_db)):
-    """Lista todos os bots disponíveis no banco de dados."""
-    bots = db.query(Bot).all()
-    
-    result = []
-    for bot in bots:
-        # Desserializa os campos JSON
-        try:
-            tags = json.loads(bot.tags)
-        except (json.JSONDecodeError, TypeError):
-            tags = []
+    """Lista todos os bots disponíveis"""
+    try:
+        bots = db.query(Bot).all()
+        result = []
         
-        bot_data = {
-            "id": bot.id,
-            "name": bot.name,
-            "gender": bot.gender,
-            "avatar_url": bot.avatar_url,
-            "personality": bot.personality,
-            "welcome_message": bot.welcome_message,
-            "tags": tags,
-        }
-        result.append(BotDisplay(**bot_data))
-        
-    return result
-
-# --- Rotas de Chat (POST /bots/chat/{bot_id}) ---
+        for bot in bots:
+            try:
+                tags = json.loads(bot.tags) if bot.tags else []
+            except:
+                tags = []
+            
+            bot_data = {
+                "id": bot.id,
+                "name": bot.name,
+                "gender": bot.gender,
+                "avatar_url": bot.avatar_url,
+                "personality": bot.personality,
+                "welcome_message": bot.welcome_message,
+                "tags": tags,
+            }
+            result.append(BotDisplay(**bot_data))
+            
+        return result
+    except Exception as e:
+        print(f"❌ Erro em list_bots: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
 @router.post("/chat/{bot_id}", response_model=ChatResponse)
 def chat_with_bot(bot_id: str, request: ChatRequest, db: Session = Depends(get_db)):
-    """Envia uma mensagem para o bot e recebe a resposta da IA."""
+    """Chat com bot usando OpenRouter"""
+    if not ai_service:
+        raise HTTPException(status_code=500, detail="Serviço de IA não disponível")
     
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
-        raise HTTPException(status_code=404, detail=f"Bot com ID '{bot_id}' não encontrado.")
+        raise HTTPException(status_code=404, detail=f"Bot '{bot_id}' não encontrado")
     
     try:
-        ai_config = json.loads(bot.ai_config_json)
-    except (json.JSONDecodeError, TypeError):
+        ai_config = json.loads(bot.ai_config_json) if bot.ai_config_json else {}
+    except:
         ai_config = {}
 
     try:
-        # Chama o serviço de IA
         ai_response = ai_service.generate_response(
             bot_data=bot,
             ai_config=ai_config,
             user_message=request.user_message,
             chat_history=request.chat_history
         )
-        
         return ChatResponse(ai_response=ai_response)
-    
-    except NotImplementedError as e:
-        # Erro gerado pelo nosso placeholder, significa que a importação falhou
-        raise HTTPException(status_code=500, detail="AIService não foi carregado. Verifique os logs de importação.")
     except Exception as e:
-        error_detail = f"A API de IA falhou. Erro: {e}"
-        print(f"ERRO DE CHAT: {error_detail}")
-        raise HTTPException(status_code=500, detail=error_detail)
+        error_msg = f"Erro na IA: {str(e)}"
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@router.post("/import")
+def import_bots(import_data: Dict[str, Any], db: Session = Depends(get_db)):
+    """Importa bots de JSON"""
+    if 'bots' not in import_data:
+        raise HTTPException(status_code=400, detail="JSON deve conter chave 'bots'")
+    
+    bots_data = import_data['bots']
+    results = {'imported': 0, 'failed': 0, 'errors': []}
+    
+    for bot_data in bots_data:
+        try:
+            bot_id = bot_data.get('id', str(uuid.uuid4()))
+            
+            existing_bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            
+            if existing_bot:
+                # Atualiza bot existente
+                for key, value in bot_data.items():
+                    if hasattr(existing_bot, key) and key != 'id':
+                        if key in ['tags', 'ai_config']:
+                            setattr(existing_bot, key, json.dumps(value))
+                        else:
+                            setattr(existing_bot, key, value)
+            else:
+                # Cria novo bot
+                new_bot = Bot(
+                    id=bot_id,
+                    creator_id=bot_data.get('creator_id', 'imported-user'),
+                    name=bot_data['name'],
+                    gender=bot_data.get('gender', ''),
+                    introduction=bot_data.get('introduction', ''),
+                    personality=bot_data.get('personality', ''),
+                    welcome_message=bot_data.get('welcome_message', ''),
+                    avatar_url=bot_data.get('avatar_url', ''),
+                    tags=json.dumps(bot_data.get('tags', [])),
+                    conversation_context=bot_data.get('conversation_context', ''),
+                    context_images=bot_data.get('context_images', '[]'),
+                    ai_config_json=json.dumps(bot_data.get('ai_config', {})),
+                    system_prompt=bot_data.get('system_prompt', '')
+                )
+                db.add(new_bot)
+            
+            results['imported'] += 1
+                
+        except Exception as e:
+            results['failed'] += 1
+            results['errors'].append(f"{bot_data.get('name', 'Unknown')}: {str(e)}")
+    
+    try:
+        db.commit()
+        results['message'] = f"Importados: {results['imported']}, Falhas: {results['failed']}"
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro no banco: {str(e)}")
+    
+    return results
