@@ -7,7 +7,7 @@ import json
 import uuid
 from typing import List, Optional
 import os
-from ai_service import AIService  # Importar o serviço de IA
+from services.ai_service import AIService  # Importar o serviço de IA
 
 app = FastAPI(title="CRINGE API", version="2.0.0")
 
@@ -629,3 +629,4 @@ async def reset_database():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
