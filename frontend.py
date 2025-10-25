@@ -28,6 +28,10 @@ if 'conversations' not in st.session_state:
     st.session_state.conversations = {}
 if 'widget_key_counter' not in st.session_state:
     st.session_state.widget_key_counter = 0
+if 'import_success' not in st.session_state:
+    st.session_state.import_success = False
+if 'import_error' not in st.session_state:
+    st.session_state.import_error = None
 
 def get_unique_key(prefix="key"):
     """Gera uma chave única para widgets"""
@@ -38,7 +42,7 @@ def get_unique_key(prefix="key"):
 def load_bots_from_db() -> List[Dict]:
     """Carrega bots do banco de dados"""
     try:
-        response = requests.get(f"{API_URL}/bots")
+        response = requests.get(f"{API_URL}/bots", timeout=10)
         if response.status_code == 200:
             return response.json()
         else:
@@ -51,7 +55,7 @@ def load_bots_from_db() -> List[Dict]:
 def delete_bot(bot_id: str):
     """Exclui um bot"""
     try:
-        response = requests.delete(f"{API_URL}/bots/{bot_id}")
+        response = requests.delete(f"{API_URL}/bots/{bot_id}", timeout=10)
         if response.status_code == 200:
             st.success("✅ Bot excluído com sucesso!")
             # Limpar estado de confirmação
@@ -71,7 +75,7 @@ def chat_with_bot(bot_id: str, message: str, conversation_id: Optional[str] = No
             "message": message,
             "conversation_id": conversation_id
         }
-        response = requests.post(f"{API_URL}/bots/chat/{bot_id}", json=payload)
+        response = requests.post(f"{API_URL}/bots/chat/{bot_id}", json=payload, timeout=30)
         if response.status_code == 200:
             return response.json()
         else:
@@ -86,12 +90,16 @@ def import_bots(bots_data: Dict):
     try:
         # Validar estrutura antes de enviar
         if "bots" not in bots_data:
-            st.error("❌ Estrutura inválida: falta a chave 'bots'")
+            st.session_state.import_error = "❌ Estrutura inválida: falta a chave 'bots'"
             return False
         
         bots_list = bots_data["bots"]
         if not isinstance(bots_list, list):
-            st.error("❌ Estrutura inválida: 'bots' deve ser uma lista")
+            st.session_state.import_error = "❌ Estrutura inválida: 'bots' deve ser uma lista"
+            return False
+        
+        if len(bots_list) == 0:
+            st.session_state.import_error = "❌ Nenhum personagem encontrado para importar"
             return False
         
         # Verificar campos obrigatórios em cada bot
@@ -99,33 +107,33 @@ def import_bots(bots_data: Dict):
         for i, bot in enumerate(bots_list):
             for field in required_fields:
                 if field not in bot or not bot[field]:
-                    st.error(f"❌ Bot {i+1} está sem o campo obrigatório: '{field}'")
+                    st.session_state.import_error = f"❌ Bot {i+1} está sem o campo obrigatório: '{field}'"
                     return False
         
         # Fazer a requisição para a API
-        with st.spinner("🔄 Importando personagens..."):
-            response = requests.post(f"{API_URL}/bots/import", json=bots_data)
-            
-            if response.status_code == 200:
-                result = response.json()
-                st.success(f"✅ {result['message']}")
-                return True
-            else:
-                try:
-                    error_detail = response.json().get('detail', 'Erro desconhecido')
-                    st.error(f"❌ Erro na API: {error_detail}")
-                except:
-                    st.error(f"❌ Erro HTTP {response.status_code}: {response.text}")
-                return False
+        response = requests.post(f"{API_URL}/bots/import", json=bots_data, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            st.session_state.import_success = True
+            st.session_state.import_error = None
+            return True
+        else:
+            try:
+                error_detail = response.json().get('detail', 'Erro desconhecido')
+                st.session_state.import_error = f"❌ Erro na API: {error_detail}"
+            except:
+                st.session_state.import_error = f"❌ Erro HTTP {response.status_code}: {response.text}"
+            return False
                 
     except requests.exceptions.ConnectionError:
-        st.error("❌ Não foi possível conectar à API. Verifique se o servidor está rodando.")
+        st.session_state.import_error = "❌ Não foi possível conectar à API. Verifique se o servidor está rodando."
         return False
     except requests.exceptions.Timeout:
-        st.error("❌ Timeout na conexão com a API.")
+        st.session_state.import_error = "❌ Timeout na conexão com a API."
         return False
     except Exception as e:
-        st.error(f"❌ Erro inesperado: {str(e)}")
+        st.session_state.import_error = f"❌ Erro inesperado: {str(e)}"
         return False
 
 # Componentes da UI
@@ -306,6 +314,16 @@ def show_import_page():
     st.title("📥 Importar Personagens")
     st.markdown("---")
     
+    # Mostrar mensagens de importação anteriores
+    if st.session_state.import_success:
+        st.success("🎉 Importação concluída com sucesso!")
+        st.session_state.import_success = False
+        st.balloons()
+    
+    if st.session_state.import_error:
+        st.error(st.session_state.import_error)
+        st.session_state.import_error = None
+    
     # Upload de arquivo JSON
     st.subheader("📁 Upload de Arquivo JSON")
     uploaded_file = st.file_uploader(
@@ -353,9 +371,11 @@ def show_import_page():
                         
                         # Confirmar importação
                         if st.button("✅ Confirmar Importação", key=get_unique_key("confirm_import")):
-                            if import_bots(bots_data):
-                                st.balloons()
-                                st.success("🎉 Importação concluída com sucesso!")
+                            with st.spinner("🔄 Importando personagens..."):
+                                if import_bots(bots_data):
+                                    st.rerun()
+                                else:
+                                    st.rerun()
                                 
                 except json.JSONDecodeError as e:
                     st.error(f"❌ Erro no formato JSON: {str(e)}")
@@ -388,9 +408,11 @@ def show_import_page():
                         
                         # Confirmar importação
                         if st.button("✅ Confirmar Importação", key=get_unique_key("confirm_import_text")):
-                            if import_bots(bots_data):
-                                st.balloons()
-                                st.success("🎉 Importação concluída com sucesso!")
+                            with st.spinner("🔄 Importando personagens..."):
+                                if import_bots(bots_data):
+                                    st.rerun()
+                                else:
+                                    st.rerun()
                                 
                 except json.JSONDecodeError as e:
                     st.error(f"❌ Erro no formato JSON: {str(e)}")
@@ -483,10 +505,12 @@ def show_import_page():
     
     if st.button("🚀 Importar Personagens Padrão", key=get_unique_key("import_default")):
         try:
-            bots_data = json.loads(default_bots_json)
-            if import_bots(bots_data):
-                st.balloons()
-                st.success("🎉 Personagens padrão importados com sucesso!")
+            with st.spinner("🔄 Importando personagens padrão..."):
+                bots_data = json.loads(default_bots_json)
+                if import_bots(bots_data):
+                    st.rerun()
+                else:
+                    st.rerun()
         except Exception as e:
             st.error(f"❌ Erro ao importar personagens padrão: {str(e)}")
     
@@ -636,7 +660,7 @@ with st.sidebar:
     # Informações do sistema
     st.caption("**Status do Sistema**")
     try:
-        health_response = requests.get(f"{API_URL}/health")
+        health_response = requests.get(f"{API_URL}/health", timeout=5)
         if health_response.status_code == 200:
             st.success("✅ API Online")
         else:
