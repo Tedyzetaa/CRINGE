@@ -22,6 +22,13 @@ if 'current_bot' not in st.session_state:
     st.session_state.current_bot = None
 if 'conversations' not in st.session_state:
     st.session_state.conversations = {}
+if 'widget_counter' not in st.session_state:
+    st.session_state.widget_counter = 0
+
+def get_unique_key(prefix="widget"):
+    """Gera uma chave única para widgets"""
+    st.session_state.widget_counter += 1
+    return f"{prefix}_{st.session_state.widget_counter}"
 
 # Funções da API
 def load_bots_from_db() -> List[Dict]:
@@ -56,14 +63,14 @@ def show_import_page_simple():
     
     # Opção 1: Upload de arquivo
     st.subheader("📁 Upload de Arquivo JSON")
-    uploaded_file = st.file_uploader("Selecione um arquivo JSON", type=['json'])
+    uploaded_file = st.file_uploader("Selecione um arquivo JSON", type=['json'], key=get_unique_key("file_upload"))
     
     # Opção 2: JSON manual
     st.subheader("📝 Ou cole o JSON aqui")
-    json_text = st.text_area("Cole o conteúdo JSON:", height=200, placeholder='{"bots": [...]}')
+    json_text = st.text_area("Cole o conteúdo JSON:", height=200, placeholder='{"bots": [...]}', key=get_unique_key("json_text"))
     
     # Botão de importação principal
-    if st.button("🚀 IMPORTAR PERSONAGENS", type="primary", use_container_width=True):
+    if st.button("🚀 IMPORTAR PERSONAGENS", type="primary", use_container_width=True, key=get_unique_key("import_main")):
         bots_data = None
         
         # Tentar obter dados do arquivo upload
@@ -100,7 +107,7 @@ def show_import_page_simple():
                     st.write(f"   {bot.get('introduction', 'Sem descrição')}")
             
             # Confirmar importação
-            if st.button("✅ CONFIRMAR IMPORTAÇÃO", type="secondary", use_container_width=True):
+            if st.button("✅ CONFIRMAR IMPORTAÇÃO", type="secondary", use_container_width=True, key=get_unique_key("confirm_import")):
                 with st.spinner("Importando personagens..."):
                     success, message = import_bots_simple(bots_data)
                     if success:
@@ -153,7 +160,7 @@ def show_import_page_simple():
         ]
     }
     
-    if st.button("🤖 Importar Personagens de Exemplo", use_container_width=True):
+    if st.button("🤖 Importar Personagens de Exemplo", use_container_width=True, key=get_unique_key("import_example")):
         with st.spinner("Importando personagens de exemplo..."):
             success, message = import_bots_simple(default_bots)
             if success:
@@ -178,13 +185,13 @@ def show_bots_list_simple():
         """)
         return
     
-    for bot in bots:
+    for i, bot in enumerate(bots):
         col1, col2 = st.columns([4, 1])
         with col1:
             st.subheader(bot['name'])
             st.write(f"*{bot['introduction']}*")
         with col2:
-            if st.button("💬 Chat", key=f"chat_{bot['id']}"):
+            if st.button("💬 Chat", key=f"chat_{bot['id']}_{i}"):
                 st.session_state.current_bot = bot
                 st.session_state.current_page = "chat"
                 st.rerun()
@@ -207,18 +214,18 @@ def show_home_page_simple():
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📋 Ver Personagens", use_container_width=True):
+        if st.button("📋 Ver Personagens", use_container_width=True, key=get_unique_key("view_bots")):
             st.session_state.current_page = "bots"
             st.rerun()
     with col2:
-        if st.button("📥 Importar", use_container_width=True):
+        if st.button("📥 Importar", use_container_width=True, key=get_unique_key("import_home")):
             st.session_state.current_page = "import"
             st.rerun()
     
     if bots:
         st.subheader("Personagens Disponíveis")
-        for bot in bots[:3]:
-            if st.button(f"💬 {bot['name']}", key=f"home_{bot['id']}"):
+        for i, bot in enumerate(bots[:3]):
+            if st.button(f"💬 {bot['name']}", key=f"home_{bot['id']}_{i}"):
                 st.session_state.current_bot = bot
                 st.session_state.current_page = "chat"
                 st.rerun()
@@ -235,7 +242,7 @@ with st.sidebar:
     }
     
     for page_name, page_id in pages.items():
-        if st.button(page_name, use_container_width=True):
+        if st.button(page_name, use_container_width=True, key=f"nav_{page_id}"):
             st.session_state.current_page = page_id
             st.rerun()
     
