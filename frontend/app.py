@@ -7,7 +7,7 @@ import time
 
 # Configuração da página
 st.set_page_config(
-    page_title="CRINGE - Personagens Interativos", 
+    page_title="CRINGE - Personagens Interativos",
     page_icon="🎭",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -92,6 +92,16 @@ def debug_ai_status():
     """Função para debug do status da IA"""
     try:
         response = requests.get(f"{API_URL}/debug/ai-status", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except:
+        return None
+
+def debug_test_ai():
+    """Teste direto da IA"""
+    try:
+        response = requests.get(f"{API_URL}/debug/test-ai", timeout=15)
         if response.status_code == 200:
             return response.json()
         return None
@@ -331,7 +341,9 @@ def show_home_page():
     
     bots = load_bots_from_db()
     health_data = check_api_health()
-    ai_status = debug_ai_status()
+    
+    # Inicializar ai_status para evitar o NameError
+    ai_status = debug_ai_status() or {}
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -349,11 +361,15 @@ def show_home_page():
     
     st.markdown("---")
     
-    # Status da IA
+    # Status da IA - CORRIGIDO: apenas Mistral
+    st.subheader("🔧 Status do Serviço de IA")
+    
     if ai_status:
-        st.subheader("🔧 Status do Serviço de IA")
+        current_model = ai_status.get('current_model', 'mistralai/mistral-7b-instruct:free')
+        
         if ai_status.get('connection_test'):
             st.success("✅ Serviço de IA: Conectado e Funcionando")
+            st.info(f"**Modelo Atual:** {current_model}")
         else:
             st.error("❌ Serviço de IA: Problemas de Conexão")
             
@@ -363,8 +379,23 @@ def show_home_page():
             if ai_status.get('api_key_set'):
                 st.write(f"**Comprimento da Key:** {ai_status.get('api_key_length', 0)} caracteres")
         with col2:
-            st.write(f"**Modelo Atual:** {ai_status.get('current_model', 'Unknown')}")
-            st.write(f"**Teste de Conexão:** {'✅ OK' if ai_status.get('connection_test') else '❌ Falhou'}")
+            st.write(f"**Modelo:** Mistral 7B Instruct")
+            st.write(f"**Status:** {'✅ OK' if ai_status.get('connection_test') else '❌ Falhou'}")
+        
+        # Botão para testar o modelo
+        if st.button("🧪 Testar Modelo Mistral", key="test_mistral_model"):
+            with st.spinner("Testando modelo Mistral..."):
+                test_results = debug_test_ai()
+                if test_results:
+                    if test_results.get('response_type') == 'success':
+                        st.success(f"✅ Teste bem-sucedido! Resposta: {test_results.get('response')}")
+                    else:
+                        st.error(f"❌ Teste falhou: {test_results.get('response')}")
+                else:
+                    st.error("Falha ao testar o modelo")
+    else:
+        st.warning("⚠️ Não foi possível obter status do serviço de IA")
+        st.info("O backend pode estar indisponível ou a rota de debug não está funcionando.")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -384,9 +415,9 @@ def show_home_page():
     st.subheader("ℹ️ Como Usar")
     st.info("""
     1. **Escolha um personagem** na página de Personagens
-    2. **Inicie uma conversa** clicando em "Conversar" 
+    2. **Inicie uma conversa** clicando em "Conversar"
     3. **Interaja naturalmente** - os personagens têm personalidades únicas!
-    4. **Problemas?** Verifique se a API Key do OpenRouter está configurada
+    4. **Powered by:** Mistral AI via OpenRouter
     """)
     
     if bots:
@@ -446,11 +477,11 @@ with st.sidebar:
         st.write(f"• {stats.get('conversations', 0)} Conversas")
         st.write(f"• {stats.get('messages', 0)} Mensagens")
         
-        ai_status = health_data.get('ai_service', 'unknown')
-        if ai_status == 'available':
+        ai_status_health = health_data.get('ai_service', 'unknown')
+        if ai_status_health == 'available':
             st.success("🤖 Serviço de IA: Disponível")
         else:
-            st.error(f"🤖 Serviço de IA: {ai_status}")
+            st.error(f"🤖 Serviço de IA: {ai_status_health}")
     
     st.markdown("---")
     
@@ -481,49 +512,16 @@ with st.sidebar:
         st.write(f"- Última msg: {st.session_state.last_user_message}")
         st.write(f"- Esperando: {st.session_state.waiting_for_response}")
         
-# Na função show_home_page(), atualize a seção de status da IA:
-
-# Status da IA
-if ai_status:
-    st.subheader("🔧 Status do Serviço de IA")
-    
-    working_models = len(ai_status.get('available_models', []))
-    current_model = ai_status.get('current_model', 'Unknown')
-    
-    if ai_status.get('connection_test'):
-        st.success(f"✅ Serviço de IA: Conectado e Funcionando")
-        st.info(f"**Modelo Atual:** {current_model}")
-    else:
-        st.error("❌ Serviço de IA: Problemas de Conexão")
-        
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(f"**API Key Configurada:** {'✅ Sim' if ai_status.get('api_key_set') else '❌ Não'}")
-        if ai_status.get('api_key_set'):
-            st.write(f"**Comprimento da Key:** {ai_status.get('api_key_length', 0)} caracteres")
-    with col2:
-        st.write(f"**Modelos Disponíveis:** {working_models}")
-        st.write(f"**Teste de Conexão:** {'✅ OK' if ai_status.get('connection_test') else '❌ Falhou'}")
-    
-    # Botão para testar todos os modelos
-    if st.button("🧪 Testar Todos os Modelos", key="test_all_models"):
-        with st.spinner("Testando modelos..."):
-            try:
-                response = requests.get(f"{API_URL}/debug/test-all-models", timeout=15)
-                if response.status_code == 200:
-                    test_results = response.json()
-                    st.write("**Resultados dos Testes:**")
-                    for result in test_results.get('test_results', []):
-                        if result['success']:
-                            st.success(f"✅ {result['model']}")
-                        else:
-                            st.error(f"❌ {result['model']}: {result.get('error', 'Erro desconhecido')}")
-                else:
-                    st.error("Falha ao testar modelos")
-            except Exception as e:
-                st.error(f"Erro no teste: {str(e)}")
+        # Teste de status da IA
+        if st.button("Testar Conexão IA", key="test_ai_connection"):
+            ai_status_debug = debug_ai_status()
+            if ai_status_debug:
+                st.json(ai_status_debug)
+            else:
+                st.error("Falha ao testar conexão IA")
     
     st.caption(f"🕒 {datetime.now().strftime('%H:%M:%S')}")
+    st.caption("🤖 Powered by Mistral AI")
 
 # Roteamento principal
 if st.session_state.current_page == "home":
@@ -535,3 +533,4 @@ elif st.session_state.current_page == "chat":
 
 st.markdown("---")
 st.caption("🎭 CRINGE - Personagens Interativos | Desenvolvido com Streamlit & FastAPI")
+st.caption("🤖 Powered by Mistral AI via OpenRouter")
