@@ -6,9 +6,11 @@ pytest tests/
 pip se encontra em um mundo novo, e não sabe como foi parar lá
 
 conda activate rpg-ia
-cd c:\cringe\4.0\cringe
-streamlit run frontend.py
+cd c:\cringe\cringe
+streamlit run app.py
 
 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
 
 não estou triste - digo olhando para pip - como voce esta? e voce senhor chapeu? - digo com um sorriso no rosto
+
+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

@@ -519,46 +519,73 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
             (user_message_id, conversation_id, chat_request.message, True)
         )
         
-        # Buscar histórico de mensagens
+        # Buscar histórico de mensagens (excluindo possíveis mensagens de erro)
         cursor.execute('''
             SELECT content, is_user FROM messages 
-            WHERE conversation_id = ? 
+            WHERE conversation_id = ? AND is_user = True
             ORDER BY created_at ASC
         ''', (conversation_id,))
-        messages = cursor.fetchall()
+        user_messages = cursor.fetchall()
         
-        # Preparar histórico para a IA
-        chat_history = []
-        for msg in messages:
-            role = "user" if msg['is_user'] else "assistant"
-            chat_history.append({
-                "role": role,
-                "content": msg['content']
-            })
+        cursor.execute('''
+            SELECT content, is_user FROM messages 
+            WHERE conversation_id = ? AND is_user = False 
+            AND content NOT LIKE '%🔴%' AND content NOT LIKE '%Erro%'
+            ORDER BY created_at ASC
+        ''', (conversation_id,))
+        bot_messages = cursor.fetchall()
         
-        logger.info(f"📜 Histórico com {len(chat_history)} mensagens")
+        # Combinar e ordenar histórico
+        all_messages = []
+        for msg in user_messages:
+            all_messages.append({"role": "user", "content": msg['content']})
+        for msg in bot_messages:
+            all_messages.append({"role": "assistant", "content": msg['content']})
+        
+        # Ordenar por timestamp (usando ordem de inserção)
+        all_messages = all_messages[-6:]  # Limitar histórico
+        
+        logger.info(f"📜 Histórico com {len(all_messages)} mensagens válidas")
         
         # Gerar resposta usando IA
         try:
-            logger.info(f"🤖 Chamando AI Service...")
             ai_response = ai_service.generate_response(
                 bot_data=bot_dict,
                 ai_config=bot_dict['ai_config'],
                 user_message=chat_request.message,
-                chat_history=chat_history
+                chat_history=all_messages
             )
-            logger.info(f"✅ Resposta da IA gerada com sucesso")
+            logger.info(f"✅ Resposta da IA gerada")
         except Exception as e:
             logger.error(f"❌ Erro no AI Service: {str(e)}")
-            # Fallback para resposta simulada
-            ai_response = f"🤖 [{bot_dict['name']}]: Desculpe, estou tendo problemas técnicos. Tente novamente. (Erro: {str(e)})"
+            # Fallback criativo baseado no bot
+            bot_name = bot_dict['name']
+            fallbacks = {
+                "Pimenta (Pip)": "💫 *Meus olhos piscam em cores confusas* Chocalho! Minhas magias estão um pouco desalinhadas hoje. Vamos tentar novamente?",
+                "Zimbrak": "⚙️ *Engrenagens rangendo suavemente* Hmm, meus circuitos precisam de ajustes. Podemos recomeçar?",
+                "Luma": "📖 *Letras douradas tremulam* Meus textos estão se reorganizando... Tente novamente, por favor.",
+                "Tiko": "🎪 *Cores piscando aleatoriamente* OPA! Meus circuitos estão dançando! Vamos tentar de novo?"
+            }
+            ai_response = fallbacks.get(bot_name, "🔴 Estou tendo dificuldades técnicas. Podemos tentar novamente?")
         
-        # Salvar resposta do bot
-        bot_message_id = str(uuid.uuid4())
-        cursor.execute(
-            "INSERT INTO messages (id, conversation_id, content, is_user) VALUES (?, ?, ?, ?)",
-            (bot_message_id, conversation_id, ai_response, False)
-        )
+        # Salvar resposta do bot (apenas se não for repetição)
+        cursor.execute('''
+            SELECT content FROM messages 
+            WHERE conversation_id = ? AND is_user = False 
+            ORDER BY created_at DESC LIMIT 1
+        ''', (conversation_id,))
+        
+        last_bot_message = cursor.fetchone()
+        if not last_bot_message or last_bot_message['content'] != ai_response:
+            bot_message_id = str(uuid.uuid4())
+            cursor.execute(
+                "INSERT INTO messages (id, conversation_id, content, is_user) VALUES (?, ?, ?, ?)",
+                (bot_message_id, conversation_id, ai_response, False)
+            )
+            logger.info("💾 Resposta salva no banco")
+        else:
+            logger.warning("⚠️ Resposta duplicada detectada, não salvando")
+            ai_response = "🔄 **Recarregando...** Vamos tentar uma abordagem diferente!"
         
         conn.commit()
         conn.close()
