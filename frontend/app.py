@@ -7,7 +7,7 @@ import time
 
 # Configuração da página
 st.set_page_config(
-    page_title="CRINGE - Personagens Interativos",
+    page_title="CRINGE - Personagens Interativos", 
     page_icon="🎭",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -25,8 +25,8 @@ def initialize_session_state():
         'selected_bot_id': None,
         'api_health': "checking",
         'last_update': None,
-        'last_user_message': None,  # Para evitar repetição
-        'waiting_for_response': False  # Para evitar múltiplos envios
+        'last_user_message': None,
+        'waiting_for_response': False
     }
     
     for key, value in defaults.items():
@@ -88,6 +88,16 @@ def check_api_health():
         st.session_state.api_health = "unreachable"
         return None
 
+def debug_ai_status():
+    """Função para debug do status da IA"""
+    try:
+        response = requests.get(f"{API_URL}/debug/ai-status", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except:
+        return None
+
 # Componentes da UI
 def create_bot_card(bot, column):
     with column:
@@ -109,7 +119,6 @@ def create_bot_card(bot, column):
                     tags = " ".join([f"`{tag}`" for tag in bot['tags']])
                     st.write(f"**Tags:** {tags}")
             
-            # Botão com chave baseada no ID do bot
             if st.button(
                 "💬 Conversar", 
                 key=f"chat_button_{bot['id']}",
@@ -118,7 +127,7 @@ def create_bot_card(bot, column):
             ):
                 st.session_state.current_bot = bot
                 st.session_state.current_page = "chat"
-                st.session_state.last_user_message = None  # Resetar ao mudar de bot
+                st.session_state.last_user_message = None
                 st.rerun()
 
 def show_chat_interface():
@@ -133,7 +142,6 @@ def show_chat_interface():
     
     bot = st.session_state.current_bot
     
-    # Header do chat
     col1, col2, col3 = st.columns([3, 1, 1])
     with col1:
         st.title(f"💬 {bot['name']}")
@@ -153,7 +161,6 @@ def show_chat_interface():
     
     st.markdown("---")
     
-    # Inicializar conversa se não existir
     if bot['id'] not in st.session_state.conversations:
         st.session_state.conversations[bot['id']] = {
             'conversation_id': None,
@@ -163,12 +170,10 @@ def show_chat_interface():
     
     current_conversation = st.session_state.conversations[bot['id']]
     
-    # Área de chat
     st.markdown("#### 💬 Conversa")
     chat_container = st.container()
     
     with chat_container:
-        # Exibir mensagem de boas-vindas se não houver mensagens
         if not current_conversation['messages']:
             with st.chat_message("assistant", avatar=bot['avatar_url']):
                 st.write(bot['welcome_message'])
@@ -179,7 +184,6 @@ def show_chat_interface():
                 'timestamp': datetime.now().isoformat()
             })
         
-        # Exibir histórico de mensagens
         for msg in current_conversation['messages']:
             avatar = None if msg['is_user'] else bot['avatar_url']
             with st.chat_message("user" if msg['is_user'] else "assistant", avatar=avatar):
@@ -191,7 +195,6 @@ def show_chat_interface():
                     except:
                         pass
     
-    # Controles de conversa
     col1, col2 = st.columns([4, 1])
     with col2:
         if st.button("🗑️ Limpar Chat", 
@@ -205,10 +208,8 @@ def show_chat_interface():
             st.session_state.last_user_message = None
             st.rerun()
     
-    # Input de mensagem
     st.markdown("---")
     
-    # Se estiver esperando resposta, desabilitar input
     if st.session_state.get('waiting_for_response', False):
         user_message = st.chat_input(
             f"⏳ Aguardando resposta de {bot['name']}...",
@@ -222,36 +223,30 @@ def show_chat_interface():
         )
     
     if user_message and user_message.strip() and not st.session_state.get('waiting_for_response', False):
-        # Validar comprimento da mensagem
         if len(user_message) > 1000:
             st.warning("⚠️ Mensagem muito longa. Limite: 1000 caracteres.")
             st.rerun()
             return
         
-        # Verificar se a mensagem não é repetida
         if st.session_state.last_user_message == user_message.strip():
             st.warning("⚠️ Você já enviou esta mensagem. Tente dizer algo diferente!")
             st.rerun()
             return
         
-        # Marcar que estamos esperando resposta
         st.session_state.waiting_for_response = True
         st.session_state.last_user_message = user_message.strip()
         
-        # Adicionar mensagem do usuário
         current_conversation['messages'].append({
             'content': user_message,
             'is_user': True,
             'timestamp': datetime.now().isoformat()
         })
         
-        # Exibir mensagem do usuário imediatamente
         with chat_container:
             with st.chat_message("user"):
                 st.write(user_message)
                 st.caption(f"🕒 {datetime.now().strftime('%H:%M')}")
         
-        # Obter resposta
         with st.spinner(f"**{bot['name']}** está pensando... 💫"):
             response = chat_with_bot(
                 bot['id'], 
@@ -259,11 +254,9 @@ def show_chat_interface():
                 current_conversation['conversation_id']
             )
             
-            # Remover flag de espera
             st.session_state.waiting_for_response = False
             
             if response and response.get('response'):
-                # Verificar se a resposta não é repetida
                 last_bot_message = None
                 for msg in reversed(current_conversation['messages']):
                     if not msg['is_user']:
@@ -278,7 +271,6 @@ def show_chat_interface():
                         'timestamp': datetime.now().isoformat()
                     })
                 else:
-                    # Se for repetida, adicionar mensagem alternativa
                     current_conversation['messages'].append({
                         'content': "🔄 Vamos mudar de assunto! O que mais gostaria de conversar?",
                         'is_user': False,
@@ -287,7 +279,6 @@ def show_chat_interface():
                 
                 st.rerun()
             else:
-                # Adicionar mensagem de erro genérica
                 error_fallbacks = {
                     "Pimenta (Pip)": "💫 *Chocalho, chocalho!* Minhas magias estão um pouco desalinhadas no momento. Vamos tentar novamente?",
                     "Zimbrak": "⚙️ *Engrenagens rangendo* Hmm, meus circuitos precisam de ajustes. Podemos recomeçar?",
@@ -329,7 +320,6 @@ def show_bots_list():
             st.rerun()
         return
     
-    # Layout de grid responsivo
     cols = st.columns(2)
     for i, bot in enumerate(bots):
         create_bot_card(bot, cols[i % 2])
@@ -341,8 +331,8 @@ def show_home_page():
     
     bots = load_bots_from_db()
     health_data = check_api_health()
+    ai_status = debug_ai_status()
     
-    # Métricas
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -359,7 +349,23 @@ def show_home_page():
     
     st.markdown("---")
     
-    # Botões de ação principais
+    # Status da IA
+    if ai_status:
+        st.subheader("🔧 Status do Serviço de IA")
+        if ai_status.get('connection_test'):
+            st.success("✅ Serviço de IA: Conectado e Funcionando")
+        else:
+            st.error("❌ Serviço de IA: Problemas de Conexão")
+            
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**API Key Configurada:** {'✅ Sim' if ai_status.get('api_key_set') else '❌ Não'}")
+            if ai_status.get('api_key_set'):
+                st.write(f"**Comprimento da Key:** {ai_status.get('api_key_length', 0)} caracteres")
+        with col2:
+            st.write(f"**Modelo Atual:** {ai_status.get('current_model', 'Unknown')}")
+            st.write(f"**Teste de Conexão:** {'✅ OK' if ai_status.get('connection_test') else '❌ Falhou'}")
+    
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🤖 Explorar Personagens", 
@@ -375,16 +381,14 @@ def show_home_page():
             st.cache_data.clear()
             st.rerun()
     
-    # Informações do sistema
     st.subheader("ℹ️ Como Usar")
     st.info("""
     1. **Escolha um personagem** na página de Personagens
-    2. **Inicie uma conversa** clicando em "Conversar"
+    2. **Inicie uma conversa** clicando em "Conversar" 
     3. **Interaja naturalmente** - os personagens têm personalidades únicas!
-    4. **Problemas?** Verifique se a API Key do OpenRouter está configurada no backend
+    4. **Problemas?** Verifique se a API Key do OpenRouter está configurada
     """)
     
-    # Personagens em destaque
     if bots:
         st.subheader("🚀 Personagens em Destaque")
         featured_bots = bots[:4]
@@ -407,7 +411,6 @@ with st.sidebar:
     st.title("🎭 CRINGE")
     st.markdown("---")
     
-    # Navegação
     st.subheader("Navegação")
     nav_col1, nav_col2 = st.columns(2)
     with nav_col1:
@@ -425,7 +428,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Status do sistema
     st.subheader("Status do Sistema")
     
     health_status = st.session_state.api_health
@@ -436,7 +438,6 @@ with st.sidebar:
     else:
         st.warning("⚠️ Backend Inacessível")
     
-    # Informações adicionais de saúde
     health_data = check_api_health()
     if health_data and health_status == "healthy":
         st.info(f"**Estatísticas:**")
@@ -445,7 +446,6 @@ with st.sidebar:
         st.write(f"• {stats.get('conversations', 0)} Conversas")
         st.write(f"• {stats.get('messages', 0)} Mensagens")
         
-        # Informação da API Key
         ai_status = health_data.get('ai_service', 'unknown')
         if ai_status == 'available':
             st.success("🤖 Serviço de IA: Disponível")
@@ -454,7 +454,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Gerenciamento de dados
     st.subheader("Gerenciamento")
     
     if st.button("🗑️ Limpar Todas Conversas", 
@@ -475,14 +474,20 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Debug info (apenas desenvolvimento)
-    if st.checkbox("🔍 Mostrar Informações de Debug", key="debug_toggle"):
+    if st.checkbox("🔍 Debug Avançado", key="debug_toggle"):
         st.write("**Debug Info:**")
-        st.write(f"- Página atual: {st.session_state.current_page}")
-        st.write(f"- Bot atual: {st.session_state.current_bot['name'] if st.session_state.current_bot else 'None'}")
-        st.write(f"- Última mensagem: {st.session_state.last_user_message}")
-        st.write(f"- Esperando resposta: {st.session_state.waiting_for_response}")
-        st.write(f"- Total conversas: {len(st.session_state.conversations)}")
+        st.write(f"- Página: {st.session_state.current_page}")
+        st.write(f"- Bot: {st.session_state.current_bot['name'] if st.session_state.current_bot else 'None'}")
+        st.write(f"- Última msg: {st.session_state.last_user_message}")
+        st.write(f"- Esperando: {st.session_state.waiting_for_response}")
+        
+        # Teste de status da IA
+        if st.button("Testar Conexão IA", key="test_ai_connection"):
+            ai_status = debug_ai_status()
+            if ai_status:
+                st.json(ai_status)
+            else:
+                st.error("Falha ao testar conexão IA")
     
     st.caption(f"🕒 {datetime.now().strftime('%H:%M:%S')}")
 
@@ -494,10 +499,5 @@ elif st.session_state.current_page == "bots":
 elif st.session_state.current_page == "chat":
     show_chat_interface()
 
-# Rodapé
 st.markdown("---")
-footer_col1, footer_col2 = st.columns([3, 1])
-with footer_col1:
-    st.caption("🎭 CRINGE - Personagens Interativos | Desenvolvido com Streamlit & FastAPI")
-with footer_col2:
-    st.caption(f"v3.0.0 | {datetime.now().year}")
+st.caption("🎭 CRINGE - Personagens Interativos | Desenvolvido com Streamlit & FastAPI")

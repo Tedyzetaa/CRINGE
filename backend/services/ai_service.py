@@ -7,7 +7,7 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-MAX_RETRIES = 2  # Reduzido para resposta mais rápida
+MAX_RETRIES = 2
 BACKOFF_FACTOR = 1.0
 
 class AIService:
@@ -15,75 +15,116 @@ class AIService:
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.api_url = OPENROUTER_API_BASE_URL
         
+        # Log detalhado da API Key
         if not self.api_key:
-            logger.error("❌ OPENROUTER_API_KEY não encontrada!")
-            logger.info("💡 Configure a variável de ambiente OPENROUTER_API_KEY no Render")
+            logger.error("❌ OPENROUTER_API_KEY não encontrada nas variáveis de ambiente!")
+            logger.info("💡 No Render: Settings → Environment Variables → OPENROUTER_API_KEY")
         else:
-            # Verifica se a API key parece válida (não vazia e tem formato básico)
-            if len(self.api_key) < 10:
-                logger.error("❌ OPENROUTER_API_KEY parece inválida (muito curta)")
+            # Verifica formato básico da API Key
+            if len(self.api_key) < 20:
+                logger.error(f"❌ API Key parece muito curta: {len(self.api_key)} caracteres")
             else:
-                logger.info(f"✅ OPENROUTER_API_KEY configurada (primeiros 10 chars): {self.api_key[:10]}...")
+                logger.info(f"✅ API Key detectada (primeiros 8 chars): {self.api_key[:8]}...")
+                logger.info(f"📏 Comprimento da API Key: {len(self.api_key)} caracteres")
 
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://github.com/Tedyzetaa/CRINGE", 
+            "HTTP-Referer": "https://cringe-render.com",  # Alterado para URL mais genérica
             "X-Title": "CRINGE Bot Platform",
             "Content-Type": "application/json"
         }
         
-        # Modelos em ordem de prioridade
+        # Modelos priorizados
         self.available_models = [
             "google/gemini-flash-1.5:free",
             "meta-llama/llama-3.1-8b-instruct:free",
+            "mistralai/mistral-7b-instruct:free",
         ]
         
         self.current_model_index = 0
         self.http_client = httpx.Client(timeout=30.0)
 
     def _test_api_connection(self) -> bool:
-        """Testa a conexão com a API OpenRouter"""
+        """Testa a conexão com a API OpenRouter com verificação detalhada"""
         if not self.api_key:
-            logger.error("❌ API Key não configurada")
+            logger.error("❌ Falha no teste: API Key não configurada")
             return False
             
         try:
+            logger.info("🧪 Iniciando teste de conexão com OpenRouter...")
+            
             test_payload = {
                 "model": self.available_models[0],
-                "messages": [{"role": "user", "content": "Test"}],
-                "max_tokens": 5
+                "messages": [{"role": "user", "content": "Responda apenas 'TESTE_OK'"}],
+                "max_tokens": 10,
+                "temperature": 0.1
             }
+            
+            # Log de debug (sem expor a chave completa)
+            debug_headers = {k: v for k, v in self.headers.items() if k != 'Authorization'}
+            debug_headers['Authorization'] = f"Bearer {self.api_key[:10]}..." if self.api_key else "None"
+            
+            logger.info(f"🔧 Debug Headers: {debug_headers}")
+            logger.info(f"🔧 Debug URL: {self.api_url}")
+            logger.info(f"🔧 Debug Payload: {test_payload}")
             
             response = self.http_client.post(
                 self.api_url,
                 headers=self.headers,
                 json=test_payload,
-                timeout=10
+                timeout=15
             )
             
+            logger.info(f"📡 Status da Resposta: {response.status_code}")
+            
             if response.status_code == 200:
-                logger.info("✅ Conexão com OpenRouter: OK")
+                result = response.json()
+                content = result['choices'][0]['message']['content'].strip()
+                logger.info(f"✅ Teste de conexão BEM-SUCEDIDO! Resposta: {content}")
                 return True
             elif response.status_code == 401:
-                logger.error("❌ API Key inválida ou não autorizada")
+                logger.error("❌ ERRO 401: API Key inválida ou não autorizada")
+                logger.error("💡 Verifique se a API Key está correta e ativa no OpenRouter")
+                return False
+            elif response.status_code == 402:
+                logger.error("❌ ERRO 402: Sem créditos ou requisição não autorizada")
+                return False
+            elif response.status_code == 429:
+                logger.warning("⚠️ ERRO 429: Rate limit excedido")
                 return False
             else:
-                logger.warning(f"⚠️ API retornou status: {response.status_code}")
+                logger.error(f"❌ ERRO {response.status_code}: {response.text}")
                 return False
                 
+        except httpx.TimeoutException:
+            logger.error("⏰ Timeout: OpenRouter não respondeu em 15 segundos")
+            return False
+        except httpx.ConnectError:
+            logger.error("🔌 Erro de conexão: Não foi possível conectar ao OpenRouter")
+            return False
         except Exception as e:
-            logger.error(f"❌ Erro na conexão: {str(e)}")
+            logger.error(f"💥 Erro inesperado no teste: {str(e)}")
             return False
 
     def _call_openrouter_api(self, payload: Dict[str, Any]) -> str:
-        """Faz chamada para API OpenRouter com fallback"""
+        """Faz chamada para API OpenRouter com fallback robusto"""
         
+        # Verificação inicial da API Key
         if not self.api_key:
-            return "🔴 **Erro de Configuração**: API Key do OpenRouter não encontrada. Configure a variável de ambiente OPENROUTER_API_KEY no Render."
+            error_msg = "❌ **Erro de Configuração**: OPENROUTER_API_KEY não encontrada. "
+            error_msg += "Configure a variável de ambiente no Render (Settings → Environment Variables)."
+            logger.error(error_msg)
+            return error_msg
         
-        if not self._test_api_connection():
-            return "🔴 **Erro de Conexão**: Não foi possível conectar ao serviço de IA. Verifique a API Key e conexão com a internet."
+        # Teste de conexão detalhado
+        connection_ok = self._test_api_connection()
+        if not connection_ok:
+            error_msg = "🔌 **Erro de Conexão**: Não foi possível conectar ao serviço de IA. "
+            error_msg += "Verifique: 1) API Key válida, 2) Conexão com internet, 3) Status do OpenRouter."
+            logger.error(error_msg)
+            return error_msg
         
+        # Tentar cada modelo disponível
         for model_index in range(len(self.available_models)):
             current_model = self.available_models[model_index]
             payload["model"] = current_model
@@ -92,6 +133,8 @@ class AIService:
             
             for attempt in range(MAX_RETRIES):
                 try:
+                    logger.info(f"📤 Tentativa {attempt + 1} para {current_model}")
+                    
                     response = self.http_client.post(
                         self.api_url,
                         headers=self.headers,
@@ -99,15 +142,24 @@ class AIService:
                         timeout=25.0
                     )
                     
+                    logger.info(f"📥 Status: {response.status_code}")
+                    
                     if response.status_code == 200:
                         result = response.json()
                         content = result['choices'][0]['message']['content'].strip()
+                        logger.info(f"✅ Resposta recebida do {current_model}")
                         self.current_model_index = model_index
                         return content
                     
-                    elif response.status_code in [402, 429]:
-                        logger.warning(f"⚠️ Status {response.status_code} para {current_model}")
+                    elif response.status_code == 402:
+                        logger.warning(f"⚠️ Sem créditos para {current_model}")
                         break
+                    
+                    elif response.status_code == 429:
+                        wait_time = BACKOFF_FACTOR * (2 ** attempt)
+                        logger.warning(f"⏰ Rate limit, aguardando {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
                     
                     else:
                         logger.warning(f"⚠️ Erro {response.status_code} para {current_model}")
@@ -129,7 +181,10 @@ class AIService:
             
             logger.info(f"❌ Modelo {current_model} falhou, tentando próximo...")
         
-        return "🔴 **Serviço Temporariamente Indisponível**: Todos os modelos de IA falharam. Tente novamente em alguns instantes."
+        error_msg = "🔴 **Serviço Indisponível**: Todos os modelos falharam. "
+        error_msg += "Tente novamente em alguns minutos ou verifique o status do OpenRouter."
+        logger.error(error_msg)
+        return error_msg
 
     def _prepare_payload(self, system_prompt: str, chat_history: List[Dict[str, str]], user_message: str, temperature: float = 0.7, max_tokens: int = 400) -> Dict[str, Any]:
         """Prepara o payload para a API"""
@@ -142,7 +197,7 @@ class AIService:
             })
         
         # Limitar histórico para evitar tokens excessivos
-        for message in chat_history[-4:]:  # Apenas últimas 4 mensagens
+        for message in chat_history[-4:]:
             role = message.get("role")
             content = message.get("content", "")
             if role in ["user", "assistant"] and content.strip():
@@ -158,6 +213,7 @@ class AIService:
             "stream": False
         }
         
+        logger.info(f"📝 Payload preparado: {len(messages)} mensagens, {max_tokens} tokens")
         return payload
 
     def generate_response(self, bot_data: Any, ai_config: Dict[str, Any], user_message: str, chat_history: List[Dict[str, str]]) -> str:
@@ -168,7 +224,8 @@ class AIService:
             else:
                 bot_dict = bot_data
             
-            logger.info(f"🤖 Gerando resposta para bot: {bot_dict.get('name', 'Unknown')}")
+            bot_name = bot_dict.get('name', 'Unknown')
+            logger.info(f"🤖 Gerando resposta para '{bot_name}': {user_message[:50]}...")
             
             temperature = min(ai_config.get('temperature', 0.7), 0.9)
             max_tokens = min(ai_config.get('max_output_tokens', 400), 500)
@@ -182,8 +239,15 @@ class AIService:
             )
             
             response = self._call_openrouter_api(payload)
+            
+            # Log do resultado
+            if response.startswith("❌") or response.startswith("🔴") or response.startswith("🔌"):
+                logger.error(f"❌ Falha na geração de resposta para {bot_name}")
+            else:
+                logger.info(f"✅ Resposta gerada com sucesso para {bot_name}")
+                
             return response
             
         except Exception as e:
-            logger.error(f"💥 Erro em generate_response: {str(e)}")
+            logger.error(f"💥 Erro crítico em generate_response: {str(e)}")
             return f"🔴 **Erro Interno**: {str(e)}"

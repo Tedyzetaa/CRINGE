@@ -603,6 +603,60 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
         logger.error(f"💥 Erro geral no chat: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro no chat: {str(e)}")
 
+@app.get("/debug/ai-status")
+async def debug_ai_status():
+    """Rota de debug para verificar status da IA"""
+    if not ai_service:
+        return {
+            "status": "error", 
+            "message": "AIService não inicializado",
+            "api_key_set": False
+        }
+    
+    # Testar conexão
+    test_result = ai_service._test_api_connection() if hasattr(ai_service, '_test_api_connection') else False
+    
+    return {
+        "status": "success",
+        "ai_service_available": True,
+        "api_key_set": bool(ai_service.api_key),
+        "api_key_length": len(ai_service.api_key) if ai_service.api_key else 0,
+        "api_key_prefix": ai_service.api_key[:8] + "..." if ai_service.api_key else "None",
+        "connection_test": test_result,
+        "available_models": ai_service.available_models if hasattr(ai_service, 'available_models') else [],
+        "current_model": ai_service.available_models[ai_service.current_model_index] if hasattr(ai_service, 'current_model_index') else "Unknown"
+    }
+
+@app.get("/debug/test-ai")
+async def debug_test_ai():
+    """Teste direto da IA"""
+    if not ai_service:
+        return {"error": "AIService não disponível"}
+    
+    try:
+        # Teste simples
+        test_bot = {
+            "name": "Test Bot",
+            "system_prompt": "You are a helpful assistant. Respond briefly.",
+            "ai_config": {"temperature": 0.7, "max_output_tokens": 50}
+        }
+        
+        response = ai_service.generate_response(
+            bot_data=test_bot,
+            ai_config=test_bot["ai_config"],
+            user_message="Hello, please respond with 'TEST_OK' if you can read this.",
+            chat_history=[]
+        )
+        
+        return {
+            "test_result": "success",
+            "response": response,
+            "response_type": "error" if any(x in response for x in ["❌", "🔴", "🔌", "Erro"]) else "success"
+        }
+        
+    except Exception as e:
+        return {"test_result": "error", "error": str(e)}
+
 @app.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str):
     """Obter histórico completo de uma conversa"""
