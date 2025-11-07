@@ -627,35 +627,76 @@ async def debug_ai_status():
         "current_model": ai_service.available_models[ai_service.current_model_index] if hasattr(ai_service, 'current_model_index') else "Unknown"
     }
 
-@app.get("/debug/test-ai")
-async def debug_test_ai():
-    """Teste direto da IA"""
+@app.get("/debug/ai-status")
+async def debug_ai_status():
+    """Rota de debug para verificar status da IA"""
+    if not ai_service:
+        return {
+            "status": "error", 
+            "message": "AIService não inicializado",
+            "api_key_set": False
+        }
+    
+    # Testar conexão
+    test_result = False
+    if hasattr(ai_service, '_test_api_connection'):
+        test_result = ai_service._test_api_connection()
+    
+    return {
+        "status": "success",
+        "ai_service_available": True,
+        "api_key_set": bool(ai_service.api_key),
+        "api_key_length": len(ai_service.api_key) if ai_service.api_key else 0,
+        "api_key_prefix": ai_service.api_key[:8] + "..." if ai_service.api_key else "None",
+        "connection_test": test_result,
+        "available_models": ai_service.available_models if hasattr(ai_service, 'available_models') else [],
+        "current_model": ai_service.available_models[ai_service.current_model_index] if hasattr(ai_service, 'current_model_index') and ai_service.available_models else "Unknown"
+    }
+
+@app.get("/debug/test-all-models")
+async def debug_test_all_models():
+    """Testa todos os modelos disponíveis"""
     if not ai_service:
         return {"error": "AIService não disponível"}
     
-    try:
-        # Teste simples
-        test_bot = {
-            "name": "Test Bot",
-            "system_prompt": "You are a helpful assistant. Respond briefly.",
-            "ai_config": {"temperature": 0.7, "max_output_tokens": 50}
-        }
-        
-        response = ai_service.generate_response(
-            bot_data=test_bot,
-            ai_config=test_bot["ai_config"],
-            user_message="Hello, please respond with 'TEST_OK' if you can read this.",
-            chat_history=[]
-        )
-        
-        return {
-            "test_result": "success",
-            "response": response,
-            "response_type": "error" if any(x in response for x in ["❌", "🔴", "🔌", "Erro"]) else "success"
-        }
-        
-    except Exception as e:
-        return {"test_result": "error", "error": str(e)}
+    results = []
+    
+    for model in ai_service.available_models:
+        try:
+            test_payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "Responda apenas 'OK'"}],
+                "max_tokens": 5,
+                "temperature": 0.1
+            }
+            
+            response = ai_service.http_client.post(
+                ai_service.api_url,
+                headers=ai_service.headers,
+                json=test_payload,
+                timeout=10
+            )
+            
+            results.append({
+                "model": model,
+                "status_code": response.status_code,
+                "success": response.status_code == 200,
+                "error": response.text if response.status_code != 200 else None
+            })
+            
+        except Exception as e:
+            results.append({
+                "model": model,
+                "status_code": "Exception",
+                "success": False,
+                "error": str(e)
+            })
+    
+    return {
+        "test_results": results,
+        "total_models": len(ai_service.available_models),
+        "working_models": len([r for r in results if r['success']])
+    }
 
 @app.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str):

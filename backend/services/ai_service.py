@@ -20,32 +20,29 @@ class AIService:
             logger.error("❌ OPENROUTER_API_KEY não encontrada nas variáveis de ambiente!")
             logger.info("💡 No Render: Settings → Environment Variables → OPENROUTER_API_KEY")
         else:
-            # Verifica formato básico da API Key
-            if len(self.api_key) < 20:
-                logger.error(f"❌ API Key parece muito curta: {len(self.api_key)} caracteres")
-            else:
-                logger.info(f"✅ API Key detectada (primeiros 8 chars): {self.api_key[:8]}...")
-                logger.info(f"📏 Comprimento da API Key: {len(self.api_key)} caracteres")
+            logger.info(f"✅ API Key detectada (primeiros 8 chars): {self.api_key[:8]}...")
+            logger.info(f"📏 Comprimento da API Key: {len(self.api_key)} caracteres")
 
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://cringe-render.com",  # Alterado para URL mais genérica
+            "HTTP-Referer": "https://cringe-render.com",
             "X-Title": "CRINGE Bot Platform",
             "Content-Type": "application/json"
         }
         
-        # Modelos priorizados
+        # MODELOS OPENROUTER VÁLIDOS E TESTADOS
         self.available_models = [
-            "google/gemini-flash-1.5:free",
-            "meta-llama/llama-3.1-8b-instruct:free",
-            "mistralai/mistral-7b-instruct:free",
+            "meta-llama/llama-3.1-8b-instruct:free",  # Modelo gratuito e estável
+            "mistralai/mistral-7b-instruct:free",     # Outro modelo gratuito
+            "huggingfaceh4/zephyr-7b-beta:free",      # Modelo alternativo
+            "microsoft/wizardlm-2-8x22b:free",        # Modelo maior (se disponível)
         ]
         
         self.current_model_index = 0
         self.http_client = httpx.Client(timeout=30.0)
 
     def _test_api_connection(self) -> bool:
-        """Testa a conexão com a API OpenRouter com verificação detalhada"""
+        """Testa a conexão com a API OpenRouter usando modelos válidos"""
         if not self.api_key:
             logger.error("❌ Falha no teste: API Key não configurada")
             return False
@@ -53,20 +50,18 @@ class AIService:
         try:
             logger.info("🧪 Iniciando teste de conexão com OpenRouter...")
             
+            # Usar o primeiro modelo da lista para teste
+            test_model = self.available_models[0]
+            
             test_payload = {
-                "model": self.available_models[0],
+                "model": test_model,
                 "messages": [{"role": "user", "content": "Responda apenas 'TESTE_OK'"}],
                 "max_tokens": 10,
                 "temperature": 0.1
             }
             
-            # Log de debug (sem expor a chave completa)
-            debug_headers = {k: v for k, v in self.headers.items() if k != 'Authorization'}
-            debug_headers['Authorization'] = f"Bearer {self.api_key[:10]}..." if self.api_key else "None"
-            
-            logger.info(f"🔧 Debug Headers: {debug_headers}")
+            logger.info(f"🔧 Testando modelo: {test_model}")
             logger.info(f"🔧 Debug URL: {self.api_url}")
-            logger.info(f"🔧 Debug Payload: {test_payload}")
             
             response = self.http_client.post(
                 self.api_url,
@@ -85,6 +80,12 @@ class AIService:
             elif response.status_code == 401:
                 logger.error("❌ ERRO 401: API Key inválida ou não autorizada")
                 logger.error("💡 Verifique se a API Key está correta e ativa no OpenRouter")
+                return False
+            elif response.status_code == 404:
+                error_data = response.json()
+                model_error = error_data.get('error', {}).get('message', 'Modelo não encontrado')
+                logger.error(f"❌ ERRO 404: {model_error}")
+                logger.error(f"💡 Modelo '{test_model}' não disponível. Tentando próximo...")
                 return False
             elif response.status_code == 402:
                 logger.error("❌ ERRO 402: Sem créditos ou requisição não autorizada")
@@ -151,6 +152,10 @@ class AIService:
                         self.current_model_index = model_index
                         return content
                     
+                    elif response.status_code == 404:
+                        logger.warning(f"❌ Modelo {current_model} não encontrado (404)")
+                        break  # Mudar para próximo modelo
+                    
                     elif response.status_code == 402:
                         logger.warning(f"⚠️ Sem créditos para {current_model}")
                         break
@@ -181,8 +186,8 @@ class AIService:
             
             logger.info(f"❌ Modelo {current_model} falhou, tentando próximo...")
         
-        error_msg = "🔴 **Serviço Indisponível**: Todos os modelos falharam. "
-        error_msg += "Tente novamente em alguns minutos ou verifique o status do OpenRouter."
+        error_msg = "🔴 **Todos os modelos falharam**: Nenhum modelo OpenRouter disponível no momento. "
+        error_msg += "Tente novamente mais tarde ou verifique https://status.openrouter.ai"
         logger.error(error_msg)
         return error_msg
 

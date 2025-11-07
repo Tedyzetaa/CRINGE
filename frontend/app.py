@@ -481,13 +481,47 @@ with st.sidebar:
         st.write(f"- Última msg: {st.session_state.last_user_message}")
         st.write(f"- Esperando: {st.session_state.waiting_for_response}")
         
-        # Teste de status da IA
-        if st.button("Testar Conexão IA", key="test_ai_connection"):
-            ai_status = debug_ai_status()
-            if ai_status:
-                st.json(ai_status)
-            else:
-                st.error("Falha ao testar conexão IA")
+# Na função show_home_page(), atualize a seção de status da IA:
+
+# Status da IA
+if ai_status:
+    st.subheader("🔧 Status do Serviço de IA")
+    
+    working_models = len(ai_status.get('available_models', []))
+    current_model = ai_status.get('current_model', 'Unknown')
+    
+    if ai_status.get('connection_test'):
+        st.success(f"✅ Serviço de IA: Conectado e Funcionando")
+        st.info(f"**Modelo Atual:** {current_model}")
+    else:
+        st.error("❌ Serviço de IA: Problemas de Conexão")
+        
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**API Key Configurada:** {'✅ Sim' if ai_status.get('api_key_set') else '❌ Não'}")
+        if ai_status.get('api_key_set'):
+            st.write(f"**Comprimento da Key:** {ai_status.get('api_key_length', 0)} caracteres")
+    with col2:
+        st.write(f"**Modelos Disponíveis:** {working_models}")
+        st.write(f"**Teste de Conexão:** {'✅ OK' if ai_status.get('connection_test') else '❌ Falhou'}")
+    
+    # Botão para testar todos os modelos
+    if st.button("🧪 Testar Todos os Modelos", key="test_all_models"):
+        with st.spinner("Testando modelos..."):
+            try:
+                response = requests.get(f"{API_URL}/debug/test-all-models", timeout=15)
+                if response.status_code == 200:
+                    test_results = response.json()
+                    st.write("**Resultados dos Testes:**")
+                    for result in test_results.get('test_results', []):
+                        if result['success']:
+                            st.success(f"✅ {result['model']}")
+                        else:
+                            st.error(f"❌ {result['model']}: {result.get('error', 'Erro desconhecido')}")
+                else:
+                    st.error("Falha ao testar modelos")
+            except Exception as e:
+                st.error(f"Erro no teste: {str(e)}")
     
     st.caption(f"🕒 {datetime.now().strftime('%H:%M:%S')}")
 
