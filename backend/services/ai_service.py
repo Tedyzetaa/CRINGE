@@ -7,161 +7,135 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-MAX_RETRIES = 2
-BACKOFF_FACTOR = 1.0
+MAX_RETRIES = 3
+BACKOFF_FACTOR = 1.5
 
 class AIService:
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.api_url = OPENROUTER_API_BASE_URL
         
-        # Log detalhado da API Key
+        logger.info(f"🔑 AIService inicializado - API Key: {'✅ PRÉSENTE' if self.api_key else '❌ AUSENTE'}")
+        
         if not self.api_key:
-            logger.error("❌ OPENROUTER_API_KEY não encontrada nas variáveis de ambiente!")
-            logger.info("💡 No Render: Settings → Environment Variables → OPENROUTER_API_KEY")
-        else:
-            logger.info(f"✅ API Key detectada (primeiros 8 chars): {self.api_key[:8]}...")
-            logger.info(f"📏 Comprimento da API Key: {len(self.api_key)} caracteres")
+            logger.error("❌ OPENROUTER_API_KEY não encontrada!")
+            logger.info("💡 Configure a variável de ambiente OPENROUTER_API_KEY")
 
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "https://cringe-render.com",
+            "HTTP-Referer": "https://github.com/Tedyzetaa/CRINGE",
             "X-Title": "CRINGE Bot Platform",
             "Content-Type": "application/json"
         }
         
-        # APENAS O MODELO QUE FUNCIONOU: Mistral
         self.available_models = [
-            "mistralai/mistral-7b-instruct:free"
+            "google/gemini-flash-1.5:free",
+            "meta-llama/llama-3.1-8b-instruct:free", 
+            "mistralai/mistral-7b-instruct:free",
+            "huggingfaceh4/zephyr-7b-beta:free",
         ]
         
         self.current_model_index = 0
-        self.http_client = httpx.Client(timeout=30.0)
+        self.http_client = httpx.Client(timeout=45.0)
 
     def _test_api_connection(self) -> bool:
-        """Testa a conexão com a API OpenRouter usando o modelo Mistral"""
-        if not self.api_key:
-            logger.error("❌ Falha no teste: API Key não configurada")
-            return False
-            
+        """Testa a conexão com a API OpenRouter"""
         try:
-            logger.info("🧪 Iniciando teste de conexão com OpenRouter...")
-            
             test_payload = {
                 "model": self.available_models[0],
-                "messages": [{"role": "user", "content": "Responda apenas 'TESTE_OK'"}],
-                "max_tokens": 10,
-                "temperature": 0.1
+                "messages": [{"role": "user", "content": "Test"}],
+                "max_tokens": 10
             }
-            
-            logger.info(f"🔧 Testando modelo: {self.available_models[0]}")
             
             response = self.http_client.post(
                 self.api_url,
                 headers=self.headers,
                 json=test_payload,
-                timeout=15
+                timeout=10
             )
             
-            logger.info(f"📡 Status da Resposta: {response.status_code}")
-            
             if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content'].strip()
-                logger.info(f"✅ Teste de conexão BEM-SUCEDIDO! Resposta: {content}")
+                logger.info("✅ Conexão com OpenRouter: OK")
                 return True
             elif response.status_code == 401:
-                logger.error("❌ ERRO 401: API Key inválida ou não autorizada")
-                return False
-            elif response.status_code == 404:
-                error_data = response.json()
-                model_error = error_data.get('error', {}).get('message', 'Modelo não encontrado')
-                logger.error(f"❌ ERRO 404: {model_error}")
-                return False
-            elif response.status_code == 402:
-                logger.error("❌ ERRO 402: Sem créditos ou requisição não autorizada")
-                return False
-            elif response.status_code == 429:
-                logger.warning("⚠️ ERRO 429: Rate limit excedido")
+                logger.error("❌ API Key inválida")
                 return False
             else:
-                logger.error(f"❌ ERRO {response.status_code}: {response.text}")
+                logger.warning(f"⚠️ API retornou status: {response.status_code}")
                 return False
                 
-        except httpx.TimeoutException:
-            logger.error("⏰ Timeout: OpenRouter não respondeu em 15 segundos")
-            return False
-        except httpx.ConnectError:
-            logger.error("🔌 Erro de conexão: Não foi possível conectar ao OpenRouter")
-            return False
         except Exception as e:
-            logger.error(f"💥 Erro inesperado no teste: {str(e)}")
+            logger.error(f"❌ Erro na conexão: {str(e)}")
             return False
 
     def _call_openrouter_api(self, payload: Dict[str, Any]) -> str:
-        """Faz chamada para API OpenRouter usando apenas Mistral"""
+        """Faz chamada para API OpenRouter com fallback"""
         
-        # Verificação inicial da API Key
-        if not self.api_key:
-            error_msg = "❌ **Erro de Configuração**: OPENROUTER_API_KEY não encontrada."
-            logger.error(error_msg)
-            return error_msg
+        if not self._test_api_connection():
+            return "🔌 Problema de conexão com o serviço de IA."
         
-        # Usar apenas o modelo Mistral
-        current_model = self.available_models[0]
-        payload["model"] = current_model
-        
-        logger.info(f"🔄 Usando modelo: {current_model}")
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                logger.info(f"📤 Tentativa {attempt + 1} para {current_model}")
+        for model_index in range(len(self.available_models)):
+            current_model = self.available_models[model_index]
+            payload["model"] = current_model
+            
+            logger.info(f"🔄 Tentando modelo: {current_model}")
+            
+            for attempt in range(MAX_RETRIES):
+                try:
+                    logger.info(f"📤 Tentativa {attempt + 1} para {current_model}")
+                    
+                    response = self.http_client.post(
+                        self.api_url,
+                        headers=self.headers,
+                        json=payload,
+                        timeout=30.0
+                    )
+                    
+                    logger.info(f"📥 Status: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        content = result['choices'][0]['message']['content'].strip()
+                        logger.info("✅ Resposta recebida com sucesso")
+                        self.current_model_index = model_index
+                        return content
+                    
+                    elif response.status_code == 402:
+                        logger.warning(f"⚠️ Sem créditos para {current_model}")
+                        break
+                    
+                    elif response.status_code == 429:
+                        wait_time = BACKOFF_FACTOR * (2 ** attempt)
+                        logger.warning(f"⏰ Rate limit, aguardando {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    
+                    else:
+                        logger.warning(f"⚠️ Erro {response.status_code} para {current_model}")
+                        if attempt < MAX_RETRIES - 1:
+                            time.sleep(BACKOFF_FACTOR * (2 ** attempt))
+                            continue
                 
-                response = self.http_client.post(
-                    self.api_url,
-                    headers=self.headers,
-                    json=payload,
-                    timeout=25.0
-                )
-                
-                logger.info(f"📥 Status: {response.status_code}")
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    content = result['choices'][0]['message']['content'].strip()
-                    logger.info(f"✅ Resposta recebida do {current_model}")
-                    return content
-                
-                elif response.status_code == 404:
-                    logger.error(f"❌ Modelo {current_model} não encontrado (404)")
-                    break
-                
-                elif response.status_code == 429:
-                    wait_time = BACKOFF_FACTOR * (2 ** attempt)
-                    logger.warning(f"⏰ Rate limit, aguardando {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                
-                else:
-                    logger.warning(f"⚠️ Erro {response.status_code} para {current_model}")
+                except httpx.TimeoutException:
+                    logger.warning(f"⏰ Timeout na tentativa {attempt + 1}")
                     if attempt < MAX_RETRIES - 1:
-                        time.sleep(BACKOFF_FACTOR)
+                        time.sleep(BACKOFF_FACTOR * (2 ** attempt))
+                        continue
+                
+                except Exception as e:
+                    logger.error(f"💥 Erro na tentativa {attempt + 1}: {str(e)}")
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(BACKOFF_FACTOR * (2 ** attempt))
                         continue
             
-            except httpx.TimeoutException:
-                logger.warning(f"⏰ Timeout na tentativa {attempt + 1}")
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(BACKOFF_FACTOR)
-                    continue
-            
-            except Exception as e:
-                logger.error(f"💥 Erro na tentativa {attempt + 1}: {str(e)}")
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(BACKOFF_FACTOR)
-                    continue
+            logger.info(f"❌ Modelo {current_model} falhou, tentando próximo...")
         
-        error_msg = "🔴 **Erro de Conexão**: Não foi possível conectar ao serviço de IA. "
-        error_msg += "O modelo Mistral pode estar temporariamente indisponível."
+        error_msg = "❌ Todos os modelos falharam."
+        if not self.api_key:
+            error_msg += " API Key não configurada."
+        else:
+            error_msg += " Verifique créditos ou conexão."
+        
         logger.error(error_msg)
         return error_msg
 
@@ -172,11 +146,10 @@ class AIService:
         if system_prompt:
             messages.append({
                 "role": "system", 
-                "content": system_prompt
+                "content": f"{system_prompt}\n\nInstrução: Responda de forma natural e coerente."
             })
         
-        # Limitar histórico para evitar tokens excessivos
-        for message in chat_history[-4:]:
+        for message in chat_history[-6:]:
             role = message.get("role")
             content = message.get("content", "")
             if role in ["user", "assistant"] and content.strip():
@@ -188,11 +161,11 @@ class AIService:
             "messages": messages,
             "model": self.available_models[self.current_model_index],
             "temperature": max(0.3, min(temperature, 0.9)),
-            "max_tokens": min(max_tokens, 500),
+            "max_tokens": min(max_tokens, 800),
             "stream": False
         }
         
-        logger.info(f"📝 Payload preparado: {len(messages)} mensagens, {max_tokens} tokens")
+        logger.info(f"📝 Payload preparado - Mensagens: {len(messages)}")
         return payload
 
     def generate_response(self, bot_data: Any, ai_config: Dict[str, Any], user_message: str, chat_history: List[Dict[str, str]]) -> str:
@@ -203,11 +176,10 @@ class AIService:
             else:
                 bot_dict = bot_data
             
-            bot_name = bot_dict.get('name', 'Unknown')
-            logger.info(f"🤖 Gerando resposta para '{bot_name}': {user_message[:50]}...")
+            logger.info(f"🤖 Gerando resposta para: {user_message[:50]}...")
             
             temperature = min(ai_config.get('temperature', 0.7), 0.9)
-            max_tokens = min(ai_config.get('max_output_tokens', 400), 500)
+            max_tokens = min(ai_config.get('max_output_tokens', 400), 800)
             
             payload = self._prepare_payload(
                 system_prompt=bot_dict['system_prompt'],
@@ -218,15 +190,8 @@ class AIService:
             )
             
             response = self._call_openrouter_api(payload)
-            
-            # Log do resultado
-            if response.startswith("❌") or response.startswith("🔴") or response.startswith("🔌"):
-                logger.error(f"❌ Falha na geração de resposta para {bot_name}")
-            else:
-                logger.info(f"✅ Resposta gerada com sucesso para {bot_name}")
-                
             return response
             
         except Exception as e:
-            logger.error(f"💥 Erro crítico em generate_response: {str(e)}")
-            return f"🔴 **Erro Interno**: {str(e)}"
+            logger.error(f"💥 Erro em generate_response: {str(e)}")
+            return f"❌ Erro interno do serviço de IA: {str(e)}"

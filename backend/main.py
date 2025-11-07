@@ -519,73 +519,46 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
             (user_message_id, conversation_id, chat_request.message, True)
         )
         
-        # Buscar histórico de mensagens (excluindo possíveis mensagens de erro)
+        # Buscar histórico de mensagens
         cursor.execute('''
             SELECT content, is_user FROM messages 
-            WHERE conversation_id = ? AND is_user = True
+            WHERE conversation_id = ? 
             ORDER BY created_at ASC
         ''', (conversation_id,))
-        user_messages = cursor.fetchall()
+        messages = cursor.fetchall()
         
-        cursor.execute('''
-            SELECT content, is_user FROM messages 
-            WHERE conversation_id = ? AND is_user = False 
-            AND content NOT LIKE '%🔴%' AND content NOT LIKE '%Erro%'
-            ORDER BY created_at ASC
-        ''', (conversation_id,))
-        bot_messages = cursor.fetchall()
+        # Preparar histórico para a IA
+        chat_history = []
+        for msg in messages:
+            role = "user" if msg['is_user'] else "assistant"
+            chat_history.append({
+                "role": role,
+                "content": msg['content']
+            })
         
-        # Combinar e ordenar histórico
-        all_messages = []
-        for msg in user_messages:
-            all_messages.append({"role": "user", "content": msg['content']})
-        for msg in bot_messages:
-            all_messages.append({"role": "assistant", "content": msg['content']})
-        
-        # Ordenar por timestamp (usando ordem de inserção)
-        all_messages = all_messages[-6:]  # Limitar histórico
-        
-        logger.info(f"📜 Histórico com {len(all_messages)} mensagens válidas")
+        logger.info(f"📜 Histórico com {len(chat_history)} mensagens")
         
         # Gerar resposta usando IA
         try:
+            logger.info(f"🤖 Chamando AI Service...")
             ai_response = ai_service.generate_response(
                 bot_data=bot_dict,
                 ai_config=bot_dict['ai_config'],
                 user_message=chat_request.message,
-                chat_history=all_messages
+                chat_history=chat_history
             )
-            logger.info(f"✅ Resposta da IA gerada")
+            logger.info(f"✅ Resposta da IA gerada com sucesso")
         except Exception as e:
             logger.error(f"❌ Erro no AI Service: {str(e)}")
-            # Fallback criativo baseado no bot
-            bot_name = bot_dict['name']
-            fallbacks = {
-                "Pimenta (Pip)": "💫 *Meus olhos piscam em cores confusas* Chocalho! Minhas magias estão um pouco desalinhadas hoje. Vamos tentar novamente?",
-                "Zimbrak": "⚙️ *Engrenagens rangendo suavemente* Hmm, meus circuitos precisam de ajustes. Podemos recomeçar?",
-                "Luma": "📖 *Letras douradas tremulam* Meus textos estão se reorganizando... Tente novamente, por favor.",
-                "Tiko": "🎪 *Cores piscando aleatoriamente* OPA! Meus circuitos estão dançando! Vamos tentar de novo?"
-            }
-            ai_response = fallbacks.get(bot_name, "🔴 Estou tendo dificuldades técnicas. Podemos tentar novamente?")
+            # Fallback para resposta simulada
+            ai_response = f"🤖 [{bot_dict['name']}]: Desculpe, estou tendo problemas técnicos. Tente novamente. (Erro: {str(e)})"
         
-        # Salvar resposta do bot (apenas se não for repetição)
-        cursor.execute('''
-            SELECT content FROM messages 
-            WHERE conversation_id = ? AND is_user = False 
-            ORDER BY created_at DESC LIMIT 1
-        ''', (conversation_id,))
-        
-        last_bot_message = cursor.fetchone()
-        if not last_bot_message or last_bot_message['content'] != ai_response:
-            bot_message_id = str(uuid.uuid4())
-            cursor.execute(
-                "INSERT INTO messages (id, conversation_id, content, is_user) VALUES (?, ?, ?, ?)",
-                (bot_message_id, conversation_id, ai_response, False)
-            )
-            logger.info("💾 Resposta salva no banco")
-        else:
-            logger.warning("⚠️ Resposta duplicada detectada, não salvando")
-            ai_response = "🔄 **Recarregando...** Vamos tentar uma abordagem diferente!"
+        # Salvar resposta do bot
+        bot_message_id = str(uuid.uuid4())
+        cursor.execute(
+            "INSERT INTO messages (id, conversation_id, content, is_user) VALUES (?, ?, ?, ?)",
+            (bot_message_id, conversation_id, ai_response, False)
+        )
         
         conn.commit()
         conn.close()
@@ -602,112 +575,6 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
     except Exception as e:
         logger.error(f"💥 Erro geral no chat: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro no chat: {str(e)}")
-
-@app.get("/debug/ai-status")
-async def debug_ai_status():
-    """Rota de debug para verificar status da IA"""
-    if not ai_service:
-        return {
-            "status": "error", 
-            "message": "AIService não inicializado",
-            "api_key_set": False
-        }
-    
-    # Testar conexão
-    test_result = ai_service._test_api_connection() if hasattr(ai_service, '_test_api_connection') else False
-    
-    return {
-        "status": "success",
-        "ai_service_available": True,
-        "api_key_set": bool(ai_service.api_key),
-        "api_key_length": len(ai_service.api_key) if ai_service.api_key else 0,
-        "api_key_prefix": ai_service.api_key[:8] + "..." if ai_service.api_key else "None",
-        "connection_test": test_result,
-        "available_models": ai_service.available_models if hasattr(ai_service, 'available_models') else [],
-        "current_model": ai_service.available_models[ai_service.current_model_index] if hasattr(ai_service, 'current_model_index') else "Unknown"
-    }
-
-@app.get("/debug/ai-status")
-async def debug_ai_status():
-    """Rota de debug para verificar status da IA"""
-    if not ai_service:
-        return {
-            "status": "error", 
-            "message": "AIService não inicializado",
-            "api_key_set": False
-        }
-    
-    # Testar conexão
-    test_result = False
-    if hasattr(ai_service, '_test_api_connection'):
-        test_result = ai_service._test_api_connection()
-    
-    return {
-        "status": "success",
-        "ai_service_available": True,
-        "api_key_set": bool(ai_service.api_key),
-        "api_key_length": len(ai_service.api_key) if ai_service.api_key else 0,
-        "api_key_prefix": ai_service.api_key[:8] + "..." if ai_service.api_key else "None",
-        "connection_test": test_result,
-        "available_models": ai_service.available_models if hasattr(ai_service, 'available_models') else [],
-        "current_model": ai_service.available_models[ai_service.current_model_index] if hasattr(ai_service, 'current_model_index') and ai_service.available_models else "Unknown"
-    }
-@app.get("/debug/ai-status")
-async def debug_ai_status():
-    """Rota de debug para verificar status da IA"""
-    if not ai_service:
-        return {
-            "status": "error", 
-            "message": "AIService não inicializado",
-            "api_key_set": False
-        }
-    
-    # Testar conexão
-    test_result = False
-    if hasattr(ai_service, '_test_api_connection'):
-        test_result = ai_service._test_api_connection()
-    
-    return {
-        "status": "success",
-        "ai_service_available": True,
-        "api_key_set": bool(ai_service.api_key),
-        "api_key_length": len(ai_service.api_key) if ai_service.api_key else 0,
-        "api_key_prefix": ai_service.api_key[:8] + "..." if ai_service.api_key else "None",
-        "connection_test": test_result,
-        "available_models": ai_service.available_models if hasattr(ai_service, 'available_models') else [],
-        "current_model": ai_service.available_models[0] if hasattr(ai_service, 'available_models') and ai_service.available_models else "mistralai/mistral-7b-instruct:free"
-    }
-
-@app.get("/debug/test-ai")
-async def debug_test_ai():
-    """Teste direto da IA com Mistral"""
-    if not ai_service:
-        return {"error": "AIService não disponível"}
-    
-    try:
-        # Teste simples com Mistral
-        test_bot = {
-            "name": "Test Bot",
-            "system_prompt": "You are a helpful assistant. Respond briefly.",
-            "ai_config": {"temperature": 0.7, "max_output_tokens": 50}
-        }
-        
-        response = ai_service.generate_response(
-            bot_data=test_bot,
-            ai_config=test_bot["ai_config"],
-            user_message="Hello, please respond with 'MISTRAL_OK' if you can read this.",
-            chat_history=[]
-        )
-        
-        return {
-            "test_result": "success",
-            "model": "mistralai/mistral-7b-instruct:free",
-            "response": response,
-            "response_type": "error" if any(x in response for x in ["❌", "🔴", "🔌", "Erro"]) else "success"
-        }
-        
-    except Exception as e:
-        return {"test_result": "error", "error": str(e)}
 
 @app.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str):
