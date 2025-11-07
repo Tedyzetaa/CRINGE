@@ -25,13 +25,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Debug seguro da API Key
-logger.info(f"🔑 MAIN DEBUG - OPENROUTER_API_KEY: {'✅ SETADA' if os.getenv('OPENROUTER_API_KEY') else '❌ NÃO SETADA'}")
-
-# Inicializar serviço de IA
+# Inicializar serviço de IA com tratamento robusto de erros
+ai_service = None
 try:
     ai_service = AIService()
     logger.info("✅ AIService inicializado com sucesso")
+    
+    # Testar conexão imediatamente
+    status = ai_service.get_status()
+    if status["connection_test"]:
+        logger.info("✅ Conexão com OpenRouter verificada e funcionando")
+    else:
+        logger.warning("⚠️ Conexão com OpenRouter com problemas")
+        
 except Exception as e:
     logger.error(f"❌ Erro ao inicializar AIService: {e}")
     ai_service = None
@@ -245,6 +251,8 @@ async def root():
         "endpoints": {
             "GET /": "Esta mensagem",
             "GET /health": "Health check com estatísticas",
+            "GET /debug/ai-status": "Status detalhado do serviço de IA",
+            "GET /debug/conversation/{id}": "Debug de conversa específica",
             "GET /bots": "Listar todos os bots",
             "GET /bots/{bot_id}": "Obter um bot específico",
             "POST /bots/import": "Importar bots via JSON",
@@ -272,16 +280,22 @@ async def health_check():
         
         conn.close()
         
+        # Status do serviço de IA
+        ai_status = "unknown"
+        if ai_service:
+            status_info = ai_service.get_status()
+            ai_status = "healthy" if status_info["connection_test"] else "unhealthy"
+        
         return {
             "status": "healthy",
             "service": "CRINGE API",
             "database": "connected",
+            "ai_service": ai_status,
             "statistics": {
                 "bots": bots_count,
                 "conversations": conversations_count,
                 "messages": messages_count
-            },
-            "ai_service": "available" if ai_service else "unavailable"
+            }
         }
     except Exception as e:
         return {
@@ -289,6 +303,89 @@ async def health_check():
             "service": "CRINGE API",
             "error": str(e)
         }
+
+@app.get("/debug/ai-status")
+async def debug_ai_status():
+    """Endpoint de debug para verificar status da IA"""
+    if not ai_service:
+        return {
+            "status": "unavailable", 
+            "message": "AIService não inicializado",
+            "details": {
+                "api_key_configured": False,
+                "ai_service_instance": False
+            }
+        }
+    
+    try:
+        # Obter status detalhado do serviço de IA
+        status = ai_service.get_status()
+        
+        return {
+            "status": "available" if status["connection_test"] else "unavailable",
+            "connection_test": status["connection_test"],
+            "details": status
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro no debug AI status: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Erro ao verificar status: {str(e)}",
+            "details": {
+                "error": str(e)
+            }
+        }
+
+@app.get("/debug/conversation/{conversation_id}")
+async def debug_conversation(conversation_id: str):
+    """Debug detalhado de uma conversa específica"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Buscar informações da conversa
+        cursor.execute('''
+            SELECT c.*, b.name as bot_name 
+            FROM conversations c 
+            LEFT JOIN bots b ON c.bot_id = b.id 
+            WHERE c.id = ?
+        ''', (conversation_id,))
+        conversation = cursor.fetchone()
+        
+        if not conversation:
+            return {"error": "Conversa não encontrada"}
+        
+        # Buscar mensagens
+        cursor.execute('''
+            SELECT * FROM messages 
+            WHERE conversation_id = ? 
+            ORDER BY created_at ASC
+        ''', (conversation_id,))
+        messages = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "conversation_id": conversation_id,
+            "bot_id": conversation['bot_id'],
+            "bot_name": conversation['bot_name'],
+            "created_at": conversation['created_at'],
+            "message_count": len(messages),
+            "messages": [
+                {
+                    "id": msg['id'],
+                    "content": msg['content'][:100] + "..." if len(msg['content']) > 100 else msg['content'],
+                    "is_user": bool(msg['is_user']),
+                    "created_at": msg['created_at']
+                }
+                for msg in messages
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro no debug da conversa: {str(e)}")
+        return {"error": f"Erro ao buscar conversa: {str(e)}"}
 
 @app.get("/bots", response_model=List[BotResponse])
 async def get_bots():
@@ -540,7 +637,7 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
         
         # Gerar resposta usando IA
         try:
-            logger.info(f"🤖 Chamando AI Service...")
+            logger.info(f"🤖 Chamando AI Service para {bot_dict['name']}...")
             ai_response = ai_service.generate_response(
                 bot_data=bot_dict,
                 ai_config=bot_dict['ai_config'],
@@ -550,8 +647,14 @@ async def chat_with_bot(bot_id: str, chat_request: ChatRequest):
             logger.info(f"✅ Resposta da IA gerada com sucesso")
         except Exception as e:
             logger.error(f"❌ Erro no AI Service: {str(e)}")
-            # Fallback para resposta simulada
-            ai_response = f"🤖 [{bot_dict['name']}]: Desculpe, estou tendo problemas técnicos. Tente novamente. (Erro: {str(e)})"
+            # Fallback para resposta simulada baseada no personagem
+            fallback_responses = {
+                "Pimenta (Pip)": "💫 *Chocalho!* Algo interrompeu minha conexão mágica... Mas sinto que você queria compartilhar algo importante!",
+                "Zimbrak": "⚙️ *Engrenagens se reajustando* Hmm, uma falha momentânea... Você estava dizendo algo interessante!",
+                "Luma": "📖 *Letras se reestabilizando* Um breve silêncio interrompeu nosso fluxo... Continue, por favor.",
+                "Tiko": "🎪 *Cores se recompondo* OPA! Um pequeno tremor na matrix! Conte mais sobre o que estava dizendo!"
+            }
+            ai_response = fallback_responses.get(bot_dict['name'], "🤖 Estou tendo problemas técnicos no momento. Tente novamente!")
         
         # Salvar resposta do bot
         bot_message_id = str(uuid.uuid4())
